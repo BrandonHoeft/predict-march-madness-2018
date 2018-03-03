@@ -84,7 +84,7 @@ regular_season_details <- RegularSeasonDetailedResults %>%
 glimpse(regular_season_details)
 ```
 
-Do to the data wrangling that will follow, we may need an identifier of each specific game matchup. To create completely unique game ID's, we need a combination of the Season, day, winning team id, losing team id. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
+Due to the data wrangling that will follow, we may need an identifier of each specific game matchup. To create completely unique game ID's, we need a combination of the Season, day, winning team id, losing team id. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
 
 ``` {r game_id, echo = TRUE}
 regular_season_details <- regular_season_details %>%
@@ -144,7 +144,7 @@ Some initial predictors I am considering developing, which will be lagging aggre
 
 *  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. I will consider accounting for shooting efficiency, turnovers, rebounding, and free throw performance. 
 
-*  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team A < C on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic[probably holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm venturing that this is problematic for modeling the potential of an **upset**, because we're not considering how well team A and team C match up individually with each other. For instance, the absolute difference in the respective shooting efficiency of team C from team B heading into a game, and controlling for or interacting with other predictors, may account for match up differences in a head to head contest that actually gives team B the edge over team C that a simple composite score ignores. 
+*  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model.  
 
 
 ``` {r feature_creating, echo = TRUE}
