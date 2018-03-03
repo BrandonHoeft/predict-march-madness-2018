@@ -1,0 +1,86 @@
+---
+title: "Develop Initial Model"
+author: "Brandon Hoeft"
+date: "March 3, 2018"
+output:
+  github_document:
+    toc: TRUE
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "",
+                      fig.height = 6, fig.width = 6)
+options(scipen=999) # turn of scientific notation.
+library(ggplot2)
+```
+
+## Overview
+
+A lot of the work in this initial analysis will be structured around wrangling data provided by Google and NCAA for the [Google Cloud & NCAA® ML Competition 2018 Men's](https://www.kaggle.com/c/mens-machine-learning-competition-2018), building initial features, and training/testing a minimum viable model for predicting outcomes of NCAA basketball games. 
+
+Research into initial features for a predictive model have been informed by advanced NBA statistics derived from traditional box score data, which was made available by the competition sponsors. 
+
+Goals of the competition are two-fold:
+
+**1**: You should submit predicted probabilities for every possible matchup in the past 4 NCAA® tournaments (2014-2017).
+
+**2**: You should submit predicted probabilities for every possible matchup before the 2018 tournament begins.
+
+## Data
+
+I'm primarily working with the dataset called *RegularSeasonDetailedResults.csv*, which has detailed aggregate box score stats for every game for each team played. See the [data dictionary](https://www.kaggle.com/c/mens-machine-learning-competition-2018/data) for more details. 
+
+``` {r data_import, echo = FALSE}
+library(aws.s3)
+library(readr)
+library(dplyr)
+# specify personal account keys as environment variables so I can read my s3 object(s) from AWS. 
+# DO NOT SAVE KEY in code or render in output!!!! Could compromise AWS account. 
+# Note to self my key and secret last gen from October 2017. 
+#Sys.setenv("AWS_ACCESS_KEY_ID" = "",
+#           "AWS_SECRET_ACCESS_KEY" = "")
+
+RegularSeasonDetailedResults <- s3read_using(FUN = read_csv, 
+                      object = "RegularSeasonDetailedResults.csv",
+                      bucket = "ncaabasketball")
+
+team_conference <- s3read_using(FUN = read_csv, 
+                      object = "TeamConferences.csv",
+                      bucket = "ncaabasketball")
+
+team_name <- s3read_using(FUN = read_csv, 
+                      object = "Teams.csv",
+                      bucket = "ncaabasketball")
+
+game_data <- RegularSeasonDetailedResults %>%
+    # conference of winning team.
+    left_join(team_conference, by = c("WTeamID" = "TeamID",
+                                      "Season" = "Season")) %>%
+    # name of winning team.
+    left_join(team_name, by = c("WTeamID" = "TeamID")) %>%
+    select(-contains("D1Season")) %>%
+    rename(WTeam_conf = ConfAbbrev,
+           WTeam_name = TeamName) %>%
+    # conference of losing team.
+    left_join(team_conference, by = c("LTeamID" = "TeamID",
+                                      "Season" = "Season")) %>%
+    # name of losing team.
+    left_join(team_name, by = c("LTeamID" = "TeamID")) %>%
+    select(-contains("D1Season")) %>%
+    rename(LTeam_conf = ConfAbbrev,
+           LTeam_name = TeamName) %>%
+    select(Season, DayNum, WTeamID, WTeam_name, WTeam_conf, WScore,
+           LTeamID, LTeam_name, LTeam_conf, LScore, everything())
+
+glimpse(game_data)
+```
+ 
+## Data Exploration
+
+WORK IN PROGRESS
+
+## Data Wrangling
+
+
