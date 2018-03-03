@@ -54,7 +54,13 @@ team_name <- s3read_using(FUN = read_csv,
                       object = "Teams.csv",
                       bucket = "ncaabasketball")
 
-game_data <- RegularSeasonDetailedResults %>%
+# detailed box score results data for all NCAA Tournament games 2003 - 2017
+NCAATourneyDetailedResults <- s3read_using(FUN = read_csv, 
+                      object = "NCAATourneyDetailedResults.csv",
+                      bucket = "ncaabasketball")
+
+# detailed box score results data for all regular season NCAA D1 games 2003 - 2017
+regular_season_details <- RegularSeasonDetailedResults %>%
     # conference of winning team.
     left_join(team_conference, by = c("WTeamID" = "TeamID",
                                       "Season" = "Season")) %>%
@@ -74,13 +80,35 @@ game_data <- RegularSeasonDetailedResults %>%
     select(Season, DayNum, WTeamID, WTeam_name, WTeam_conf, WScore,
            LTeamID, LTeam_name, LTeam_conf, LScore, everything())
 
-glimpse(game_data)
+glimpse(regular_season_details)
 ```
  
-## Data Exploration
-
-WORK IN PROGRESS
-
 ## Data Wrangling
 
+For the game data to be potentially useful in predicting the outcomes of games, the inputs cannot have [data leakage](https://www.kaggle.com/wiki/Leakage). 
 
+*  **simplest approach**: create features that represent regular season summary aggregates as predictors for each team in the NCAA tournament. Use all outcomes of NCAA tournament games from 2003-2013 as target. 
+
+*  **better approach**: create features that are cumulative aggregates throughought the course of the regular season. As such, training observations can be basically every single game outcome from the regular season, with the features in each row representing the rolling, aggregate summary stats of the team as of the day of the season prior to the exam. This enables much more training records to build a model off of. To test the model, we'll still use the aggregate features as of the last day of the regular season, as inputs to predict tournament performance. 
+
+### Feature Creation 
+
+Some initial predictors I am considering developing, which will be lagging aggregates of team and opponent performance will primarily focus on rate type metrics, as opposed to counting statistics. The former remove the bias of context such as playing style/tempo, which contribute towards noise in counting stats (ex. total points, total 3p made, etc). Some examples include
+
+*  Points per Possession (PPP):  this is an offensive efficiency metric. 
+
+*  Defensive Points per Possession (dPPP): this is a  defensive efficiency metric.
+
+*  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. I will consider accounting for shooting efficiency, turnovers, rebounding, and free throw performance. 
+
+*  Matchup Differentials: A really cool insight or hypothesis I learned from good 'ole internet research is that algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups. 
+
+*  
+
+``` {r feature_creating, echo = TRUE}
+
+```
+
+## Feature Exploration
+
+WORK IN PROGRESS. Not sure if I'll publish these findings. 
