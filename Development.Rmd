@@ -13,7 +13,8 @@ library(knitr)
 opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "",
                       fig.height = 6, fig.width = 6)
 options(scipen=999) # turn of scientific notation.
-library(ggplot2)
+library(pryr) # mem_used() and object_size() functions to manage/understand memory usage.
+
 ```
 
 ## Overview
@@ -82,7 +83,21 @@ regular_season_details <- RegularSeasonDetailedResults %>%
 
 glimpse(regular_season_details)
 ```
- 
+
+Do to the data wrangling that will follow, we may need an identifier of each specific game matchup. To create completely unique game ID's, we need a combination of the Season, day, winning team id, losing team id. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
+
+``` {r game_id, echo = TRUE}
+regular_season_details <- regular_season_details %>%
+    mutate(game_id = paste(Season, DayNum, WTeamID, LTeamID, sep = "_")) %>%
+    select(game_id, everything())
+    
+# check unique. Should have value of 1. 
+regular_season_details %>%
+    group_by(game_id) %>%
+    summarize(frequency = n()) %>%
+    arrange(desc(frequency)) %>% slice(1:5)
+```
+
 ## Data Wrangling
 
 For the game data to be potentially useful in predicting the outcomes of games, the inputs cannot have [data leakage](https://www.kaggle.com/wiki/Leakage). 
@@ -90,6 +105,34 @@ For the game data to be potentially useful in predicting the outcomes of games, 
 *  **simplest approach**: create features that represent regular season summary aggregates as predictors for each team in the NCAA tournament. Use all outcomes of NCAA tournament games from 2003-2013 as target. 
 
 *  **better approach**: create features that are cumulative aggregates throughought the course of the regular season. As such, training observations can be basically every single game outcome from the regular season, with the features in each row representing the rolling, aggregate summary stats of the team as of the day of the season prior to the exam. This enables much more training records to build a model off of. To test the model, we'll still use the aggregate features as of the last day of the regular season, as inputs to predict tournament performance. 
+
+In order to properly start computing lagging aggregate summary stats prior to every game, the data needs to be restructured from its very untidy wide format. Data from both teams playing a game are in one row, with similar variables (ex. FGM) spread across multiple columns. A given team's summary data will sometimes be in the prefixed **W** columns when they won, but other times their summary data will be in the prefixed **L** columns from their losses. 
+
+However, for good data pre-processing, I need each row to represent every game played by every team. 
+``` {r feature_creating, echo = TRUE}
+regular_season_details_winner <- regular_season_details %>%
+    select(game_id, Season, DayNum, starts_with("W")) %>%
+    rename_at(vars(starts_with("W")), # for columns starting with W
+              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
+    mutate(outcome = "W")
+    
+
+regular_season_details_loser <- regular_season_details %>%
+    # need to create variable that codes the game location of the losing team, since the variable "Wloc" only codes winning team
+    mutate(LLoc = ifelse(WLoc == "A", "H",
+                         ifelse(WLoc == "H", "A", "N"))) %>%
+    select(game_id, Season, DayNum, starts_with("L")) %>%
+    rename_at(vars(starts_with("L")), # for columns starting with L
+              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip off L. 
+    mutate(outcome = "L")
+
+# stack dataframes on top each other, sort by 
+regular_season_details_long <- bind_rows(regular_season_details_winner,
+                                         regular_season_details_loser) %>%
+    arrange(TeamID, Season, DayNum)
+
+```
+
 
 ### Feature Creation 
 
@@ -101,12 +144,13 @@ Some initial predictors I am considering developing, which will be lagging aggre
 
 *  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. I will consider accounting for shooting efficiency, turnovers, rebounding, and free throw performance. 
 
-*  Matchup Differentials: A really cool insight or hypothesis I learned from good 'ole internet research is that algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups. 
+*  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team A < C on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic[probably holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm venturing that this is problematic for modeling the potential of an **upset**, because we're not considering how well team A and team C match up individually with each other. For instance, the absolute difference in the respective shooting efficiency of team C from team B heading into a game, and controlling for or interacting with other predictors, may account for match up differences in a head to head contest that actually gives team B the edge over team C that a simple composite score ignores. 
 
-*  
 
 ``` {r feature_creating, echo = TRUE}
-
+regular_season_details <- regular_season_details %>%
+    mutate(Wpossessions = 0.96 * ((WFGA) - (WOR) + (WTO) + (0.44 * WFTA)), # https://www.nbastuffer.com/analytics101/possession/
+           Lpossessions = 0.96 * ((LFGA) - (LOR) + (LTO) + (0.44 * LFTA)))
 ```
 
 ## Feature Exploration
