@@ -161,8 +161,10 @@ Some initial predictors I am considering developing, which will be lagging aggre
 
 *  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model.  
 
+Any features built for the model that are called "percentage" are really just a proportion (0-1 scale). percentage is used as it is a common parlance for sports statistics as opposed to proportion. However, it's still good to be aware that .500 season win rate means 50% win rate and not .50% win rate in my data.  
 
-``` {r feature_creating, echo = TRUE}
+ **NEXT FEATURES: ORB%, DRB%, Turnover% (offense and defense), Free Throw Fact (offense and defense) **
+``` {r feature_creating, echo = FALSE}
 reg_season_details_long_features <- reg_season_details_long %>%
     mutate(possessions = 0.96 * ((FGA) - (OR) + (TO) + (0.44 * FTA))) %>% # https://www.nbastuffer.com/analytics101/possession/
     # conduct analysis within Season for each team
@@ -170,13 +172,16 @@ reg_season_details_long_features <- reg_season_details_long %>%
     # sort each team's game (row) chronological order
     arrange(Team_name, Season, DayNum) %>%
     # 1 game lag cumulative or other aggregated team stats, within season, per team.
-    mutate(cum_ppp_offense = lag(cumsum(Score), 1) / lag(cumsum(possessions), 1),
-           cum_ppp_defense = lag(cumsum(Score - Score_diff), 1) / lag(cumsum(possessions), 1),
+    mutate(ppp_offense = lag(cumsum(Score), 1) / lag(cumsum(possessions), 1),
+           ppp_defense = lag(cumsum(Score - Score_diff), 1) / lag(cumsum(possessions), 1),
            # cumulative % difference in offense vs. defensive ppp
-           cum_ppp_pct_diff = round(100 * ((cum_ppp_offense / cum_ppp_defense) -1), 1),
+           ppp_pct_diff = round(((ppp_offense / ppp_defense) -1), 1),
            avg_score_diff = lag(cummean(Score_diff), 1),
-           cum_season_wins = lag(cumsum(outcome_1_0), 1),
-           cum_season_win_rate = cum_season_wins / lag(row_number()), 1)
+           season_wins = lag(cumsum(outcome_1_0), 1),
+           season_win_rate = season_wins / lag(row_number(), 1),
+           # offensive related
+           assist_to_fgm_ratio = lag(cumsum(Ast), 1) / lag(cumsum(FGM), 1),
+           effective_fg_pct = (lag(cumsum(FGM), 1) + lag(cumsum(0.5 * FGM3), 1)) / lag(cumsum(FGA), 1))
 
 temp <- reg_season_details_long %>%
     filter(Team_name == c("Loyola-Chicago")) %>%
@@ -188,13 +193,14 @@ temp <- reg_season_details_long %>%
     mutate(ppp_offense = lag(cumsum(Score), 1) / lag(cumsum(possessions), 1),
            ppp_defense = lag(cumsum(Score - Score_diff), 1) / lag(cumsum(possessions), 1),
            # cumulative % difference in offense vs. defensive ppp
-           ppp_pct_diff = round(100 * ((cum_ppp_offense / cum_ppp_defense) -1), 1),
+           ppp_pct_diff = round(((ppp_offense / ppp_defense) -1), 1),
            avg_score_diff = lag(cummean(Score_diff), 1),
            season_wins = lag(cumsum(outcome_1_0), 1),
-           season_win_rate = cum_season_wins / lag(row_number(), 1),
+           season_win_rate = season_wins / lag(row_number(), 1),
            # offensive related
-           assist_to_fgm_ratio = lag()) %>%
-    select(1:6, possessions, Score_diff, avg_score_diff, cum_ppp_offense, cum_ppp_defense, cum_ppp_pct_diff, cum_season_wins, cum_season_win_rate)
+           assist_to_fgm_ratio = lag(cumsum(Ast), 1) / lag(cumsum(FGM), 1),
+           effective_fg_pct = (lag(cumsum(FGM), 1) + lag(cumsum(0.5 * FGM3), 1)) / lag(cumsum(FGA), 1)) %>%
+    select(1:6, possessions, Ast, FGM, FGM3, FGA, assist_to_fgm_ratio, effective_fg_pct, season_wins, season_win_rate)
     
 
 temp2 <- temp %>%
