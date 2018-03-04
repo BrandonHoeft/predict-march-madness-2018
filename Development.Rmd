@@ -55,13 +55,24 @@ team_name <- s3read_using(FUN = read_csv,
                       object = "Teams.csv",
                       bucket = "ncaabasketball")
 
+# Massey Rankings website.
+rankings <- s3read_using(FUN = read_csv, 
+                      object = "MasseyOrdinals.csv",
+                      bucket = "ncaabasketball")
+
+# https://fivethirtyeight.blogs.nytimes.com/2011/03/14/how-we-made-our-n-c-a-a-picks/
+rankings <- rankings %>%
+    filter(SystemName %in% c("POM", # Pomeroy
+                             "SAG", # Sagarin (USA Today)
+                             "RPI")) # Rating % Index. Accounts for Strength of Schedule. 
+
 # detailed box score results data for all NCAA Tournament games 2003 - 2017
 NCAATourneyDetailedResults <- s3read_using(FUN = read_csv, 
                       object = "NCAATourneyDetailedResults.csv",
                       bucket = "ncaabasketball")
 
 # detailed box score results data for all regular season NCAA D1 games 2003 - 2017
-regular_season_details <- RegularSeasonDetailedResults %>%
+reg_season_details <- RegularSeasonDetailedResults %>%
     # conference of winning team.
     left_join(team_conference, by = c("WTeamID" = "TeamID",
                                       "Season" = "Season")) %>%
@@ -81,18 +92,18 @@ regular_season_details <- RegularSeasonDetailedResults %>%
     select(Season, DayNum, WTeamID, WTeam_name, WTeam_conf, WScore,
            LTeamID, LTeam_name, LTeam_conf, LScore, everything())
 
-glimpse(regular_season_details)
+glimpse(reg_season_details)
 ```
 
 Due to the data wrangling that will follow, we may need an identifier of each specific game matchup. To create completely unique game ID's, we need a combination of the Season, day, winning team id, losing team id. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
 
 ``` {r game_id, echo = TRUE}
-regular_season_details <- regular_season_details %>%
+reg_season_details <- reg_season_details %>%
     mutate(game_id = paste(Season, DayNum, WTeamID, LTeamID, sep = "_")) %>%
     select(game_id, everything())
     
 # check unique. Should have value of 1. 
-regular_season_details %>%
+reg_season_details %>%
     group_by(game_id) %>%
     summarize(frequency = n()) %>%
     arrange(desc(frequency)) %>% slice(1:5)
@@ -110,25 +121,29 @@ In order to properly start computing lagging aggregate summary stats prior to ev
 
 However, for good data pre-processing, I need each row to represent every game played by every team. 
 ``` {r feature_creating, echo = TRUE}
-regular_season_details_winner <- regular_season_details %>%
+reg_season_details_winner <- reg_season_details %>%
+    mutate(WScore_diff = WScore - LScore) %>%
     select(game_id, Season, DayNum, starts_with("W")) %>%
     rename_at(vars(starts_with("W")), # for columns starting with W
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
-    mutate(outcome = "W")
+    mutate(outcome = "W",
+           outcome_1_0 = 1)
     
 
-regular_season_details_loser <- regular_season_details %>%
+reg_season_details_loser <- reg_season_details %>%
     # need to create variable that codes the game location of the losing team, since the variable "Wloc" only codes winning team
-    mutate(LLoc = ifelse(WLoc == "A", "H",
+    mutate(LScore_diff = LScore - WScore,
+           LLoc = ifelse(WLoc == "A", "H",
                          ifelse(WLoc == "H", "A", "N"))) %>%
     select(game_id, Season, DayNum, starts_with("L")) %>%
     rename_at(vars(starts_with("L")), # for columns starting with L
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip off L. 
-    mutate(outcome = "L")
+    mutate(outcome = "L",
+           outcome_1_0 = 0)
 
 # stack dataframes on top each other, sort by 
-regular_season_details_long <- bind_rows(regular_season_details_winner,
-                                         regular_season_details_loser) %>%
+reg_season_details_long <- bind_rows(reg_season_details_winner,
+                                         reg_season_details_loser) %>%
     arrange(TeamID, Season, DayNum)
 
 ```
@@ -148,9 +163,43 @@ Some initial predictors I am considering developing, which will be lagging aggre
 
 
 ``` {r feature_creating, echo = TRUE}
-regular_season_details <- regular_season_details %>%
-    mutate(Wpossessions = 0.96 * ((WFGA) - (WOR) + (WTO) + (0.44 * WFTA)), # https://www.nbastuffer.com/analytics101/possession/
-           Lpossessions = 0.96 * ((LFGA) - (LOR) + (LTO) + (0.44 * LFTA)))
+reg_season_details_long_features <- reg_season_details_long %>%
+    mutate(possessions = 0.96 * ((FGA) - (OR) + (TO) + (0.44 * FTA))) %>% # https://www.nbastuffer.com/analytics101/possession/
+    # conduct analysis within Season for each team
+    group_by(Team_name, Season) %>%
+    # sort each team's game (row) chronological order
+    arrange(Team_name, Season, DayNum) %>%
+    # 1 game lag cumulative or other aggregated team stats, within season, per team.
+    mutate(cum_ppp_offense = lag(cumsum(Score), 1) / lag(cumsum(possessions), 1),
+           cum_ppp_defense = lag(cumsum(Score - Score_diff), 1) / lag(cumsum(possessions), 1),
+           # cumulative % difference in offense vs. defensive ppp
+           cum_ppp_pct_diff = round(100 * ((cum_ppp_offense / cum_ppp_defense) -1), 1),
+           avg_score_diff = lag(cummean(Score_diff), 1),
+           cum_season_wins = lag(cumsum(outcome_1_0), 1),
+           cum_season_win_rate = cum_season_wins / lag(row_number()), 1)
+
+temp <- reg_season_details_long %>%
+    filter(Team_name == c("Loyola-Chicago")) %>%
+    # https://www.nbastuffer.com/analytics101/possession/
+    mutate(possessions = round(0.96 * ((FGA) - (OR) + (TO) + (0.44 * FTA)))) %>%
+    group_by(Team_name, Season) %>%
+    arrange(Team_name, Season, DayNum) %>%
+    # 1 game lag cumulative or other aggregated team stats, within season, per team.
+    mutate(ppp_offense = lag(cumsum(Score), 1) / lag(cumsum(possessions), 1),
+           ppp_defense = lag(cumsum(Score - Score_diff), 1) / lag(cumsum(possessions), 1),
+           # cumulative % difference in offense vs. defensive ppp
+           ppp_pct_diff = round(100 * ((cum_ppp_offense / cum_ppp_defense) -1), 1),
+           avg_score_diff = lag(cummean(Score_diff), 1),
+           season_wins = lag(cumsum(outcome_1_0), 1),
+           season_win_rate = cum_season_wins / lag(row_number(), 1),
+           # offensive related
+           assist_to_fgm_ratio = lag()) %>%
+    select(1:6, possessions, Score_diff, avg_score_diff, cum_ppp_offense, cum_ppp_defense, cum_ppp_pct_diff, cum_season_wins, cum_season_win_rate)
+    
+
+temp2 <- temp %>%
+    filter(Season == 2017 & DayNum %in% 11:117) %>%
+    summarize(ppp_offense = sum(Score) / sum(possessions))
 ```
 
 ## Feature Exploration
