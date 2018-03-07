@@ -203,7 +203,7 @@ reg_season_details_long <- bind_rows(reg_season_details_winner,
 
 ### Feature Creation 
 
-Some initial predictors I am considering developing, which will be lagging aggregates of team and opponent performance will primarily focus on rate type metrics, as opposed to counting statistics. The former remove the bias of context such as playing style/tempo, which contribute towards noise in counting stats (ex. total points, total 3p made, etc). Some examples include
+Initial predictors I am considering developing represent 1-game lag averages of team's prior game performance. These will primarily focus on rate type metrics, as opposed to counting statistics. The former remove the bias of context such as playing style/tempo, which contribute towards noise in counting stats (ex. total points, total 3p made, etc). Some examples include
 
 *  Points per Possession (PPP):  this is an offensive efficiency metric. 
 
@@ -211,19 +211,20 @@ Some initial predictors I am considering developing, which will be lagging aggre
 
 *  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. I will consider accounting for shooting efficiency, turnovers, rebounding, and free throw performance. 
 
+* Efficiency type metrics as published by [Ken Pomeroy](https://kenpom.com/blog/ratings-glossary/)
+
 *  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model.  
 
-Any features built for the model that are called "percentage" are really just a proportion (0-1 scale). Percentage is used as it is a common parlance for sports statistics as opposed to proportion. However, it's still good to be aware that .500 season win rate means 50% win rate and not .50% win rate with these data.  
-
- **NEXT FEATURES: ORB%, DRB%, Turnover% (defense) **
- 
 ``` {r feature_creating, echo = FALSE}
 reg_season_details_cumulative_stats <- reg_season_details_long %>%
     group_by(Team_name, Season) %>%
     # sort each team's game (row) chronological order
     arrange(Team_name, Season, DayNum) %>% 
     # these are 1 game lag cumulative averages, per team per season. I average each team’s stats by game (equal weighting by game). 
-    mutate(possessions = lag(cummean(possessions)), # default lag of n = 1 prior period.
+    mutate(season_wins = lag(cumsum(outcome_1_0)), # default lag of n = 1 prior period.
+           season_win_rate = season_wins / lag(row_number()),
+           possessions = lag(cummean(possessions)), 
+           average_tempo = lag(cummean(average_tempo)),
            offense_efficiency = lag(cummean(offense_efficiency)),
            defense_efficiency = lag(cummean(defense_efficiency)),
            net_efficiency_ratio = lag(cummean(net_efficiency_ratio)),
@@ -233,13 +234,20 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
            ORB_rate = lag(cummean(ORB_rate)),
            DRB_rate = lag(cummean(DRB_rate)),
            FT_rate = lag(cummean(FT_rate)),
-           FTM_pct = lag(cummean(FTM_pct))
-           )
+           FTM_pct = lag(cummean(FTM_pct)),
+           offense_tov_per_100 = lag(cummean(offense_tov_per_100)),
+           defense_effective_fg_rate = lag(cummean(defense_effective_fg_rate)),
+           defense_FT_rate = lag(cummean(defense_FT_rate)),
+           defense_tov_per_100 = lag(cummean(defense_tov_per_100)),
+           opponent_ORB_rate = lag(cummean(opponent_ORB_rate)),
+           opponent_DRB_rate = lag(cummean(opponent_DRB_rate))
+           ) %>%
+    select(1:6, outcome, outcome_1_0, everything())
     
-    
+###### Data Checks #########
  reg_season_details_long %>% 
      filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% 
-     select(1:6, 22:32) %>%
+     select(1:6, 22:41) %>%
      View()
  
 loyola17_game_stats <- filter(reg_season_details_long, Team_name == "Loyola-Chicago" & Season == 2017)
@@ -247,71 +255,9 @@ mean(loyola17_game_stats$effective_fg_rate[1:29]) # this agrees with the value i
 
 reg_season_details_cumulative_stats %>%
     filter(Team_name == "Loyola-Chicago" & Season == 2017) %>%
-    select(1:6, 22:32) %>%
+    select(1:8, 24:43) %>%
      View()
-    
-    mutate(tempo = lag(cummean(possessions)), # avg. possessions per game. 
-           # points per 100 possessions on offense. 
-           offense_efficiency = 100 * (lag(cumsum(Score)) / lag(cumsum(possessions))),
-           # points per 100 possessions on defense.  
-           defense_efficiency = 100 * (lag(cumsum(Score - Score_diff)) / lag(cumsum(possessions))),
-           # cumulative % difference in offense vs. defensive pts per 100 possessions
-           net_efficiency_pct = round(((offense_efficiency / defense_efficiency) -1), 3),
-           avg_score_diff = lag(cummean(Score_diff)),
-#calculate here          season_wins = lag(cumsum(outcome_1_0)),
-#calculate here           season_win_rate = season_wins / lag(row_number()),
-           # more offens related
-           assist_to_fgm_ratio = lag(cumsum(Ast)) / lag(cumsum(FGM)),
-           effective_fg_pct = (lag(cumsum(FGM)) + lag(cumsum(0.5 * FGM3))) / lag(cumsum(FGA), 1),
-           # free throw factor
-           FTA_to_FGA = lag(cumsum(FTA)) / lag(cumsum(FGA)),
-           FTM_pct = lag(cumsum(FTM)) / lag(cumsum(FTA)),
-           # Turnover factor: turnovers per 100 possessions.
-           offense_tov_per_100 = 100 *(lag(cumsum(TO)) / (lag(cumsum(FGA)) + lag(cumsum(0.44 * FTA)) + lag(cumsum(TO))))
-           ) %>%
-    select(-possessions)
 
-
-
-
-reg_season_details_long_features %>% filter(Team_name == "Loyola-Chicago") %>% View()
-
-
-
-temp <- reg_season_details_long %>%
-    filter(Team_name == c("Loyola-Chicago")) %>%
-    # https://www.nbastuffer.com/analytics101/possession/
-    mutate(possessions = round(0.96 * ((FGA) - (OR) + (TO) + (0.44 * FTA)))) %>%
-    group_by(Team_name, Season) %>%
-    arrange(Team_name, Season, DayNum) %>%
-    # these are 1 game lag cumulative average stats, within season, per team. Unweighted averages. They ARE NOT equally weighted per game the way Pomeroy does it. 
-    mutate(tempo = lag(cummean(possessions)),
-           # points per 100 possessions on offense. 
-           offense_efficiency = 100 * (lag(cumsum(Score)) / lag(cumsum(possessions))),
-           # points per 100 possessions on defense.  
-           defense_efficiency = 100 * (lag(cumsum(Score - Score_diff)) / lag(cumsum(possessions))),
-           # cumulative % difference in offense vs. defensive pts per 100 possessions
-           net_efficiency_pct = round(((offense_efficiency / defense_efficiency) -1), 3),
-           avg_score_diff = lag(cummean(Score_diff)),
-           season_wins = lag(cumsum(outcome_1_0)),
-           season_win_rate = season_wins / lag(row_number()),
-           # more offens related
-           assist_to_fgm_ratio = lag(cumsum(Ast)) / lag(cumsum(FGM)),
-           effective_fg_pct = (lag(cumsum(FGM)) + lag(cumsum(0.5 * FGM3))) / lag(cumsum(FGA), 1),
-           # free throw factor
-           FTA_to_FGA = lag(cumsum(FTA)) / lag(cumsum(FGA)),
-           FTM_pct = lag(cumsum(FTM)) / lag(cumsum(FTA)),
-           # Turnover factor: turnovers per 100 possessions.
-           tov_per_100 = 100 *(lag(cumsum(TO)) / (lag(cumsum(FGA)) + lag(cumsum(0.44 * FTA)) + lag(cumsum(TO))))
-           )
-
-
-temp %>%
-    filter(Season == 2017) %>% 
-    select(1:6, TO, FGA, FTA, tov_per_100) %>% View()
-
-temp3 <- filter(temp2, Season == 2017 & DayNum %in% 11:50)
-mean(temp3$avg_ppp_offense, na.rm = TRUE)
 ```
 
 
