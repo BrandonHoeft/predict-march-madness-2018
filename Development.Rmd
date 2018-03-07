@@ -117,13 +117,67 @@ For the game data to be potentially useful in predicting the outcomes of games, 
 
 *  **better approach**: create features that are cumulative aggregates throughought the course of the regular season. As such, training observations can be basically every single game outcome from the regular season, with the features in each row representing the rolling, aggregate summary stats of the team as of the day of the season prior to the exam. This enables much more training records to build a model off of. To test the model, we'll still use the aggregate features as of the last day of the regular season, as inputs to predict tournament performance. 
 
-In order to properly start computing lagging aggregate summary stats prior to every game, the data needs to be restructured from its very untidy wide format. Data from both teams playing a game are in one row, with similar variables (ex. FGM) spread across multiple columns. A given team's summary data will sometimes be in the prefixed **W** columns when they won, but other times their summary data will be in the prefixed **L** columns from their losses. 
+Some of the first things I want to create from the existing data structure of *RegularSeasonDetailedResults.csv* is to capture statistics about the opponent of the winning team, and the losing team, before I re-structure the dataset into a more tidy format downstream. Stats about opponents like 
 
-However, for good data pre-processing, I need each row to represent every game played by every team. 
+```{r}
+
+# get opponent stats so we can calculate defensive effective FG% (FGM, FGM3, FGA), defensive TO%, defensive ORB%, defensive FT rate.
+reg_season_details <- reg_season_details %>%
+    mutate(Wpossessions = round(0.96 * ((WFGA) - (WOR) + (WTO) + (0.44 * WFTA))), # https://www.nbastuffer.com/analytics101/possession/
+           Lpossessions = round(0.96 * ((LFGA) - (LOR) + (LTO) + (0.44 * LFTA))),
+           average_tempo = (Wpossessions + Lpossessions) / 2,
+           ########## WINNING TEAM's derived statistics ########## 
+           # points scored per 100 possessions on offense by winning team. 
+           Woffense_efficiency = 100 * (WScore / Wpossessions),
+           # points allowed per 100 possessions on defense by winning team.  
+           Wdefense_efficiency = 100 * (LScore / Lpossessions),
+           # difference in offense vs. defensive pts per 100 possessions
+           Wnet_efficiency_ratio = round(((Woffense_efficiency / Wdefense_efficiency) -1), 3),
+           Wscore_diff = WScore - LScore,
+           # more offense related
+           Wassist_to_fgm_ratio = WAst / WFGM,
+           Weffective_fg_rate = (WFGM + (0.5 * WFGM3)) / WFGA,
+           # Rebounding factors
+           WORB_rate = WOR / (WOR + LDR),
+           WDRB_rate = WDR / (LOR + WDR),
+           # free throw factor
+           WFT_rate = WFTA / WFGA,
+           WFTM_pct = WFTM / WFTA,
+           # Turnover factor: turnovers per 100 possessions.
+           Woffense_tov_per_100 = 100 *(WTO / (WFGA + (0.44 * WFTA) + WTO)),
+           # Winner's defense stats. based on how the losing team performed in game. 
+           Wdefense_effective_fg_rate = (LFGM + (0.5 * LFGM3)) / LFGA,
+           Wdefense_FT_rate = LFTA / LFGA,
+           Wdefense_tov_per_100 = 100 *(LTO / (LFGA + (0.44 * LFTA) + LTO)),
+           Wopponent_ORB_rate = LOR / (LOR + WDR),
+           Wopponent_DRB_rate = LDR / (WOR + LDR),
+           ########## LOSING TEAM's derived statistics ########## 
+           Loffense_efficiency = 100 * (LScore / Lpossessions),
+           Ldefense_efficiency = 100 * (WScore / Wpossessions),
+           Lnet_efficiency_ratio = round(((Loffense_efficiency / Ldefense_efficiency) -1), 3),
+           Lscore_diff = LScore - WScore,
+           Lassist_to_fgm_ratio = LAst / LFGM,
+           Leffective_fg_rate = (LFGM + (0.5 * LFGM3)) / LFGA,
+           LORB_rate = LOR / (LOR + WDR),
+           LDRB_rate = LDR / (WOR + LDR),
+           LFT_rate = LFTA / LFGA,
+           LFTM_pct = LFTM / LFTA,
+           Loffense_tov_per_100 = 100 *(LTO / (LFGA + (0.44 * LFTA) + LTO)),
+           Ldefense_effective_fg_rate = (WFGM + (0.5 * WFGM3)) / WFGA,
+           Ldefense_FT_rate = WFTA / WFGA,
+           Ldefense_tov_per_100 = 100 *(WTO / (WFGA + (0.44 * WFTA) + WTO)),
+           Lopponent_ORB_rate = WOR / (WOR + LDR), 
+           Lopponent_DRB_rate = WDR / (LOR + WDR)
+)
+```
+
+In order to properly start computing lagging aggregate summary stats prior to every game, the data needs to be restructured from this very untidy wide format. Data from both teams playing a game are in one row, with similar variables (ex. FGM) spread across multiple columns. A given team's summary data will  be in the prefixed **W** columns when they won, but other times their summary data will be in the prefixed **L** columns from their losses. 
+
+However, for good data pre-processing of team cumulative summary statistics prior to each game, I need each row to represent every unique game played by every team. 
+
 ``` {r feature_creating, echo = TRUE}
 reg_season_details_winner <- reg_season_details %>%
-    mutate(WScore_diff = WScore - LScore) %>%
-    select(game_id, Season, DayNum, starts_with("W")) %>%
+    select(game_id, Season, DayNum, starts_with("W"), average_tempo) %>%
     rename_at(vars(starts_with("W")), # for columns starting with W
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
     mutate(outcome = "W",
@@ -132,10 +186,9 @@ reg_season_details_winner <- reg_season_details %>%
 
 reg_season_details_loser <- reg_season_details %>%
     # need to create variable that codes the game location of the losing team, since the variable "Wloc" only codes winning team
-    mutate(LScore_diff = LScore - WScore,
-           LLoc = ifelse(WLoc == "A", "H",
+    mutate(LLoc = ifelse(WLoc == "A", "H",
                          ifelse(WLoc == "H", "A", "N"))) %>%
-    select(game_id, Season, DayNum, starts_with("L")) %>%
+    select(game_id, Season, DayNum, starts_with("L"), average_tempo) %>%
     rename_at(vars(starts_with("L")), # for columns starting with L
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip off L. 
     mutate(outcome = "L",
@@ -145,7 +198,6 @@ reg_season_details_loser <- reg_season_details %>%
 reg_season_details_long <- bind_rows(reg_season_details_winner,
                                          reg_season_details_loser) %>%
     arrange(TeamID, Season, DayNum)
-
 ```
 
 
@@ -166,13 +218,38 @@ Any features built for the model that are called "percentage" are really just a 
  **NEXT FEATURES: ORB%, DRB%, Turnover% (defense) **
  
 ``` {r feature_creating, echo = FALSE}
-reg_season_details_long_features <- reg_season_details_long %>%
-    mutate(possessions = round(0.96 * ((FGA) - (OR) + (TO) + (0.44 * FTA)))) %>% # https://www.nbastuffer.com/analytics101/possession/
-    # conduct analysis within Season for each team
+reg_season_details_cumulative_stats <- reg_season_details_long %>%
     group_by(Team_name, Season) %>%
     # sort each team's game (row) chronological order
-    arrange(Team_name, Season, DayNum) %>%
-    # these are 1 game lag cumulative average stats, within season, per team. Unweighted averages. They ARE NOT equally weighted per game the way Pomeroy does it. 
+    arrange(Team_name, Season, DayNum) %>% 
+    # these are 1 game lag cumulative averages, per team per season. I average each team’s stats by game (equal weighting by game). 
+    mutate(possessions = lag(cummean(possessions)), # default lag of n = 1 prior period.
+           offense_efficiency = lag(cummean(offense_efficiency)),
+           defense_efficiency = lag(cummean(defense_efficiency)),
+           net_efficiency_ratio = lag(cummean(net_efficiency_ratio)),
+           score_diff = lag(cummean(score_diff)),
+           assist_to_fgm_ratio = lag(cummean(assist_to_fgm_ratio)),
+           effective_fg_rate = lag(cummean(effective_fg_rate)),
+           ORB_rate = lag(cummean(ORB_rate)),
+           DRB_rate = lag(cummean(DRB_rate)),
+           FT_rate = lag(cummean(FT_rate)),
+           FTM_pct = lag(cummean(FTM_pct))
+           )
+    
+    
+ reg_season_details_long %>% 
+     filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% 
+     select(1:6, 22:32) %>%
+     View()
+ 
+loyola17_game_stats <- filter(reg_season_details_long, Team_name == "Loyola-Chicago" & Season == 2017)
+mean(loyola17_game_stats$effective_fg_rate[1:29]) # this agrees with the value in reg_season_details_cumulative_stats on last game of season.
+
+reg_season_details_cumulative_stats %>%
+    filter(Team_name == "Loyola-Chicago" & Season == 2017) %>%
+    select(1:6, 22:32) %>%
+     View()
+    
     mutate(tempo = lag(cummean(possessions)), # avg. possessions per game. 
            # points per 100 possessions on offense. 
            offense_efficiency = 100 * (lag(cumsum(Score)) / lag(cumsum(possessions))),
@@ -181,8 +258,8 @@ reg_season_details_long_features <- reg_season_details_long %>%
            # cumulative % difference in offense vs. defensive pts per 100 possessions
            net_efficiency_pct = round(((offense_efficiency / defense_efficiency) -1), 3),
            avg_score_diff = lag(cummean(Score_diff)),
-           season_wins = lag(cumsum(outcome_1_0)),
-           season_win_rate = season_wins / lag(row_number()),
+#calculate here          season_wins = lag(cumsum(outcome_1_0)),
+#calculate here           season_win_rate = season_wins / lag(row_number()),
            # more offens related
            assist_to_fgm_ratio = lag(cumsum(Ast)) / lag(cumsum(FGM)),
            effective_fg_pct = (lag(cumsum(FGM)) + lag(cumsum(0.5 * FGM3))) / lag(cumsum(FGA), 1),
@@ -190,7 +267,7 @@ reg_season_details_long_features <- reg_season_details_long %>%
            FTA_to_FGA = lag(cumsum(FTA)) / lag(cumsum(FGA)),
            FTM_pct = lag(cumsum(FTM)) / lag(cumsum(FTA)),
            # Turnover factor: turnovers per 100 possessions.
-           tov_per_100 = 100 *(lag(cumsum(TO)) / (lag(cumsum(FGA)) + lag(cumsum(0.44 * FTA)) + lag(cumsum(TO))))
+           offense_tov_per_100 = 100 *(lag(cumsum(TO)) / (lag(cumsum(FGA)) + lag(cumsum(0.44 * FTA)) + lag(cumsum(TO))))
            ) %>%
     select(-possessions)
 
