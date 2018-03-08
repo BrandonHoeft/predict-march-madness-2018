@@ -19,7 +19,7 @@ library(pryr) # mem_used() and object_size() functions to manage/understand memo
 
 ## Overview
 
-A lot of the work in this initial analysis will be structured around wrangling data provided by Google and NCAA for the [Google Cloud & NCAA® ML Competition 2018 Men's](https://www.kaggle.com/c/mens-machine-learning-competition-2018), building initial features, and training/testing a minimum viable model for predicting outcomes of NCAA basketball games. 
+The work in this analysis will be structured around wrangling data provided by Google and NCAA for the [Google Cloud & NCAA® ML Competition 2018 Men's](https://www.kaggle.com/c/mens-machine-learning-competition-2018), building initial features, and training/testing a minimum viable model for predicting outcomes of NCAA basketball games. 
 
 Research into initial features for a predictive model have been informed by advanced NBA statistics derived from traditional box score data, which was made available by the competition sponsors. 
 
@@ -31,7 +31,7 @@ Goals of the competition are two-fold:
 
 ## Data
 
-I'm primarily working with the dataset called *RegularSeasonDetailedResults.csv*, which has detailed aggregate box score stats for every game for each team played. See the [data dictionary](https://www.kaggle.com/c/mens-machine-learning-competition-2018/data) for more details. 
+I'm primarily working with the dataset called *RegularSeasonDetailedResults.csv*, which has detailed aggregate box score stats for every game for each team played. See the [data dictionary](https://www.kaggle.com/c/mens-machine-learning-competition-2018/data) for more details. The data is structured in such a way that each row represents a single game between two teams with columns representing box score statistics for each the winning and the losing team.
 
 ``` {r data_import, echo = FALSE}
 library(aws.s3)
@@ -95,7 +95,7 @@ reg_season_details <- RegularSeasonDetailedResults %>%
 glimpse(reg_season_details)
 ```
 
-Due to the data wrangling that will follow, we may need an identifier of each specific game matchup. To create completely unique game ID's, we need a combination of the Season, day, winning team id, losing team id. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
+Due to the data wrangling that will follow, I created a unique game identifier of each specific game matchup by concatenating the Season, DayNum, WTeamID, LTeamID. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
 
 ``` {r game_id, echo = TRUE}
 reg_season_details <- reg_season_details %>%
@@ -109,15 +109,26 @@ reg_season_details %>%
     arrange(desc(frequency)) %>% slice(1:5)
 ```
 
-## Data Wrangling
+## Data Wrangling Approach
 
 For the game data to be potentially useful in predicting the outcomes of games, the inputs cannot have [data leakage](https://www.kaggle.com/wiki/Leakage). 
 
-*  **simplest approach**: create features that represent regular season summary aggregates as predictors for each team in the NCAA tournament. Use all outcomes of NCAA tournament games from 2003-2013 as target. 
+*  **simplest approach**: create features that represent regular season summary aggregates as predictors for each team that exist in the NCAA tournament from 2003-2017. Use all games of NCAA tournament games from 2003-2013 to train a model. 
 
-*  **better approach**: create features that are cumulative aggregates throughought the course of the regular season. As such, training observations can be basically every single game outcome from the regular season, with the features in each row representing the rolling, aggregate summary stats of the team as of the day of the season prior to the exam. This enables much more training records to build a model off of. To test the model, we'll still use the aggregate features as of the last day of the regular season, as inputs to predict tournament performance. 
+*  **better approach**: create features that are cumulative 1-day lag summary statistics measured over the course of each team's regular season. As such, training observations can be any single game outcome from the regular season. The features in each row could represent in-season summary stats leading up to the game day in question. This enables much more training records to build a model off of. To test the model, we'll still use the aggregate features as of the last day of the regular season, as inputs to predict that season's NCAA tournament performance. 
 
-Some of the first things I want to create from the existing data structure of *RegularSeasonDetailedResults.csv* is to capture statistics about the opponent of the winning team, and the losing team, before I re-structure the dataset into a more tidy format downstream. Stats about opponents like 
+### Per game Rate/Efficiency Measurements 
+
+Some of the first things I want to create from the data in *RegularSeasonDetailedResults.csv* is to capture rate and efficiency based statistics (as opposed to frequency or count stats) about the the winning team and the losing team of each game. Frequency or count based stats are known to be filled with bias that add too much noise *For example, a team's very high points per game might be a function of a fast paced playing style, and not because they're efficient or good shooters.* These initial measures are not going to be predictors in a model, but are the first step towards creating predictors/features. 
+
+Some examples and other sources of inspiration include:
+
+*  Points per Possession (PPP):  this is an offensive efficiency metric adjusted to per 100 possessions. 
+*  Defensive Points per Possession (dPPP): this is a  defensive efficiency metric to per 100 possessions.
+
+*  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. Areas to consider include shooting, rebounding, turnovers, free throws. 
+
+* Efficiency type metrics as published by [Ken Pomeroy](https://kenpom.com/blog/ratings-glossary/)
 
 ```{r}
 
@@ -171,9 +182,10 @@ reg_season_details <- reg_season_details %>%
 )
 ```
 
-In order to properly start computing lagging aggregate summary stats prior to every game, the data needs to be restructured from this very untidy wide format. Data from both teams playing a game are in one row, with similar variables (ex. FGM) spread across multiple columns. A given team's summary data will  be in the prefixed **W** columns when they won, but other times their summary data will be in the prefixed **L** columns from their losses. 
+In order to properly start computing 1-game lag team summary stats leading up to every game in a given season, the data needs to be restructured from the currently untidy wide format. Data from both teams playing a game currently exist in one row, with similar variables (ex. FGM) spread across multiple columns. Thankfully, it's known that a given team's box score data will be in the prefixed **W** columns when they won, in the prefixed **L** columns for the game row where they lost. Their opponents would just be in the adjacent and oppositely prefixed columns. 
 
-However, for good data pre-processing of team cumulative summary statistics prior to each game, I need each row to represent every unique game played by every team. 
+For good data pre-processing of team cumulative summary statistics prior to each game, I need each row to represent every unique game played by every team so I can compute these cumulating summary statistics
+for all their games (wins & losses) in season. 
 
 ``` {r feature_creating, echo = TRUE}
 reg_season_details_winner <- reg_season_details %>%
@@ -201,19 +213,10 @@ reg_season_details_long <- bind_rows(reg_season_details_winner,
 ```
 
 
-### Feature Creation 
+###  Convert per game stats to lagging team performance features
+ 
+Given the per game summary measures previously created, I can now create initial predictors that represent 1-game lag summaries of team's season performance leading up to the game date in question. 
 
-Initial predictors I am considering developing represent 1-game lag averages of team's prior game performance. These will primarily focus on rate type metrics, as opposed to counting statistics. The former remove the bias of context such as playing style/tempo, which contribute towards noise in counting stats (ex. total points, total 3p made, etc). Some examples include
-
-*  Points per Possession (PPP):  this is an offensive efficiency metric. 
-
-*  Defensive Points per Possession (dPPP): this is a  defensive efficiency metric.
-
-*  Dean Oliver's [Four Factors](https://www.basketball-reference.com/about/factors.html): concepts from a noteworthy basketball statistician's factors for basketball success. I will consider accounting for shooting efficiency, turnovers, rebounding, and free throw performance. 
-
-* Efficiency type metrics as published by [Ken Pomeroy](https://kenpom.com/blog/ratings-glossary/)
-
-*  Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model.  
 
 ``` {r feature_creating, echo = FALSE}
 reg_season_details_cumulative_stats <- reg_season_details_long %>%
@@ -249,17 +252,27 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
      filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% 
      select(1:6, 22:41) %>%
      View()
- 
-loyola17_game_stats <- filter(reg_season_details_long, Team_name == "Loyola-Chicago" & Season == 2017)
-mean(loyola17_game_stats$effective_fg_rate[1:29]) # this agrees with the value in reg_season_details_cumulative_stats on last game of season.
 
 reg_season_details_cumulative_stats %>%
     filter(Team_name == "Loyola-Chicago" & Season == 2017) %>%
     select(1:8, 24:43) %>%
      View()
 
+ 
+loyola17_game_stats <- filter(reg_season_details_long, Team_name == "Loyola-Chicago" & Season == 2017)
+mean(loyola17_game_stats$effective_fg_rate[1:29]) # this agrees with the value in reg_season_details_cumulative_stats on last game of season.
+
+filter(reg_season_details_cumulative_stats, Team_name == "Loyola-Chicago" & Season == 2017) %>%
+    inner_join(reg_season_details_cumulative_stats, by = "game_id") %>% 
+    filter(Team_name.x != Team_name.y) %>%
+    arrange(Season.x, DayNum.x) %>%
+    View()
+
 ```
 
+### Consider Matchup Differences
+
+Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model. 
 
 ## Feature Exploration
 
