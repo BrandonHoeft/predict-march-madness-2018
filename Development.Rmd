@@ -153,7 +153,7 @@ reg_season_details <- reg_season_details %>%
            WDRB_rate = WDR / (LOR + WDR),
            # free throw factor
            WFT_rate = WFTA / WFGA,
-           WFTM_pct = WFTM / WFTA,
+           WFTM_pct = ifelse(is.nan(WFTM / WFTA), .689, WFTM / WFTA),
            # Turnover factor: turnovers per 100 possessions.
            Woffense_tov_per_100 = 100 *(WTO / (WFGA + (0.44 * WFTA) + WTO)),
            # Winner's defense stats. based on how the losing team performed in game. 
@@ -172,7 +172,7 @@ reg_season_details <- reg_season_details %>%
            LORB_rate = LOR / (LOR + WDR),
            LDRB_rate = LDR / (WOR + LDR),
            LFT_rate = LFTA / LFGA,
-           LFTM_pct = LFTM / LFTA,
+           LFTM_pct = ifelse(is.nan(LFTM / LFTA), .689, LFTM / LFTA),
            Loffense_tov_per_100 = 100 *(LTO / (LFGA + (0.44 * LFTA) + LTO)),
            Ldefense_effective_fg_rate = (WFGM + (0.5 * WFGM3)) / WFGA,
            Ldefense_FT_rate = WFTA / WFGA,
@@ -243,10 +243,12 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
            defense_FT_rate = lag(cummean(defense_FT_rate)),
            defense_tov_per_100 = lag(cummean(defense_tov_per_100)),
            opponent_ORB_rate = lag(cummean(opponent_ORB_rate)),
-           opponent_DRB_rate = lag(cummean(opponent_DRB_rate))
-           ) %>%
-    select(1:6, outcome, outcome_1_0, everything())
-    
+           opponent_DRB_rate = lag(cummean(opponent_DRB_rate))) %>%
+    select(1:6, outcome, outcome_1_0, everything()) %>%
+    ungroup()
+```
+
+``` {r datachecks, include = FALSE, eval = FALSE}
 ###### Data Checks #########
  reg_season_details_long %>% 
      filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% 
@@ -270,7 +272,46 @@ filter(reg_season_details_cumulative_stats, Team_name == "Loyola-Chicago" & Seas
 
 ```
 
+### Create Data Frame for Predictive Models
+ 
+Each row currently represents the 1-day lag summary stats of each NCAA team prior to any given game in a season. Currently the `reg_season_details_cumulative_stats` dataset has 2 rows for each game_id, one representing team A's stats leading up to that game, another representing team B's. Since the goal of the problem is to predict if a given team will win a game against the other, the data frame needs to be reshaped to suit the problem.
+
+Specifically, each row will still represent a game_id, but we want some columns for that game_id row representing team A's statistics, and and another set of columns representing their opponent's statistics, team B. The Target vector will represent the outcome of the game for Team A, Win or Loss. *Note that for a given game_id, we will only need one row to represent that game for both team's.*
+
+``` {r}
+
+modeling_dataset <- reg_season_details_cumulative_stats %>%
+    # self-join to get opponents data on same row as team playing a game.
+    inner_join(reg_season_details_cumulative_stats, by = "game_id") %>%
+    # remove doops where Team A and Team A is it's opponent. 
+    # b/c each game_id shows up twice in reg_season_details_cumulative_stats.
+    filter(Team_name.x != Team_name.y) %>%
+    rename_at(vars(ends_with(".x")), # for columns with .x (team outcome to predict)
+              function(x) stringr::str_sub(x, start = 1L, end = -3L)) %>% # strip off the .x
+    rename_at(vars(ends_with(".y")), # for columns with.y
+              function(x) stringr::str_replace(x, "\\.y", "_OPP")) %>% # suffix w/ opponent.
+    # Select variables
+    select(game_id, Season, DayNum, TeamID, Team_name, Team_conf, outcome, outcome_1_0,
+           Loc, possessions, offense_efficiency, defense_efficiency,
+           net_efficiency_ratio, score_diff, assist_to_fgm_ratio, effective_fg_rate,
+           ORB_rate, DRB_rate, FT_rate, FTM_pct, offense_tov_per_100, 
+           defense_effective_fg_rate, defense_FT_rate, defense_tov_per_100,
+           opponent_ORB_rate, opponent_DRB_rate, average_tempo, season_wins,
+           season_win_rate, ends_with("OPP")) %>%
+    # remove unneeded variables about opponent.
+    select(-Score_OPP, -Season_OPP, -DayNum_OPP, -outcome_OPP,
+           -outcome_1_0_OPP,-Loc_OPP, -FGM_OPP, -FGA_OPP, -FGM3_OPP, -FGA3_OPP,
+           -FTM_OPP, -FTA_OPP, -OR_OPP, -DR_OPP, -Ast_OPP, -TO_OPP, -Stl_OPP,
+           -Blk_OPP, -PF_OPP) %>%
+    arrange(Team_name, Season, DayNum) 
+
+modeling_dataset %>%
+    filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% View()
+```
+
 ### Consider Matchup Differences
+
+Since we have statistics about each team heading into the game, we can also develop predictor features that don't just consider team A and team B's respective performance stats, but also their head-to-head matchup differences on these performance stats. These performance differences might be even more powerful in predicting the outcome of a given game between two teams.
 
 Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model. 
 
