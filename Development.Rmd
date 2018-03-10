@@ -272,7 +272,7 @@ filter(reg_season_details_cumulative_stats, Team_name == "Loyola-Chicago" & Seas
 
 ```
 
-### Create Data Frame for Predictive Models
+### Create head-to-head matchup data frame 
  
 Each row currently represents the 1-day lag summary stats of each NCAA team prior to any given game in a season. Currently the `reg_season_details_cumulative_stats` dataset has 2 rows for each game_id, one representing team A's stats leading up to that game, another representing team B's. Since the goal of the problem is to predict if a given team will win a game against the other, the data frame needs to be reshaped to suit the problem.
 
@@ -280,7 +280,7 @@ Specifically, each row will still represent a game_id, but we want some columns 
 
 ``` {r}
 
-modeling_dataset <- reg_season_details_cumulative_stats %>%
+head_to_head_stats <- reg_season_details_cumulative_stats %>%
     # self-join to get opponents data on same row as team playing a game.
     inner_join(reg_season_details_cumulative_stats, by = "game_id") %>%
     # remove doops where Team A and Team A is it's opponent. 
@@ -305,16 +305,46 @@ modeling_dataset <- reg_season_details_cumulative_stats %>%
            -Blk_OPP, -PF_OPP) %>%
     arrange(Team_name, Season, DayNum) 
 
-modeling_dataset %>%
-    filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% View()
+#head_to_head_stats %>%
+#    filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% View()
 ```
 
-### Consider Matchup Differences
+### Consider Matchup Differences (Comparative Advantage)
 
-Since we have statistics about each team heading into the game, we can also develop predictor features that don't just consider team A and team B's respective performance stats, but also their head-to-head matchup differences on these performance stats. These performance differences might be even more powerful in predicting the outcome of a given game between two teams.
+Since we have statistics about each team heading into the game, we can also develop predictor features that don't just consider team A and team B's respective performance stats, but also their head-to-head matchup differences on these performance stats. These performance differences might be even more powerful in predicting the outcome of a given game between two teams. An interesting insight I picked up from [here](http://dsal1951-portfolio-v1.businesscatalyst.com/portfolio/ncaa-bracket-selector.html) is that "*basketball is not transitive and the likelihood that Team A beats Team B is a function of each team's skill level **AND** how well the two teams "match up" against eachother.*" In other words, it's not good enough to just see which team ranks better than the other and pick that team. We need to model how these team's look compared to each other directly heading into a matchup on a battery of measures we think are driver's of game performance. 
 
-Matchup Differentials: Algorithms that treat bracketology as a ranking problem assume that the transitive property applies to head to head match ups for teams in the tournament that likely haven't played each other before or often. If team A is > team B on an index score, and team C > A on this scoring system, then team C > team B and we predict team C to win. Generally, this may be a good heuristic that [generally holds up](https://www.theplayerstribune.com/math-meets-football-the-transitive-property-is-real/), but I'm positing that this could be problematic for modeling the potential of an **upset**. We're not considering how well team B and team C match up individually with each other. For instance, a feature may be the difference in the shooting efficiency of team C from team B heading into a game. Perhaps this gives one team a matchup edge over another, which can be measured for a signal in the trained model. 
+As such, the next set of features below measure the comparative differences between team A and it's opponent heading into the game we're trying to predict. Note that some rows will return NA's at the beginning of a season because either or both team's playing the game may not yet have had a prior game that season yet to derive cumulative summary stats from. Anyways, earlier season games should probably be filtered from the modeling data due to small cumulative performance sample size in season. 
 
-## Feature Exploration
+``` {r}
+head_to_head_matchup_stats <- head_to_head_stats %>%
+    mutate(possessions_DIFF = possessions - possessions_OPP, # basically the same as tempo_DIFF
+           tempo_DIFF = average_tempo - average_tempo_OPP,
+           offense_efficiency_DIFF = offense_efficiency - offense_efficiency_OPP,
+           defense_efficiency_DIFF = defense_efficiency - defense_efficiency_OPP,
+           net_efficiency_ratio_DIFF = net_efficiency_ratio - net_efficiency_ratio_OPP,
+           score_margin_DIFF = score_diff - score_diff_OPP,
+           assist_to_fgm_ratio_DIFF = assist_to_fgm_ratio - assist_to_fgm_ratio_OPP,
+           effective_fg_rate_DIFF = effective_fg_rate - effective_fg_rate_OPP,
+           ORB_rate_DIFF = ORB_rate - ORB_rate_OPP,
+           DRB_rate_DIFF = DRB_rate - DRB_rate_OPP,
+           FT_rate_DIFF = FT_rate - FT_rate_OPP,
+           FTM_pct_DIFF = FTM_pct - FTM_pct_OPP,
+           offense_tov_per_100_DIFF = offense_tov_per_100 - offense_tov_per_100_OPP,
+           defense_effective_fg_rate_DIFF = defense_effective_fg_rate - defense_effective_fg_rate_OPP,
+           defense_FT_rate_DIFF = defense_FT_rate - defense_FT_rate_OPP,
+           defense_tov_per_100_DIFF = defense_tov_per_100 - defense_tov_per_100_OPP,
+           # Difference in how each team allow's their opposition from getting ORB's.
+           opponent_ORB_rate_DIFF = opponent_ORB_rate - opponent_ORB_rate_OPP,
+           opponent_DRB_rate_DIFF = opponent_DRB_rate - opponent_DRB_rate_OPP,
+           season_wins_DIFF = season_wins - season_wins_OPP,
+           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP)
+```
 
-WORK IN PROGRESS. Not sure if I'll publish these findings. 
+## Modeling Dataset
+
+Things to do:
+
+* identify the target vector, W or L. This will be the column of one of the team's in the head-to-head datasets.  
+* Filter out features that aren't goin to be considered as predictors. Only need the target vector and feature vectors.
+* apply a **sampling strategy**: make sure the data is balanced and records are independent. For instance, there should be about 50/50 proportion of W's and L's to predict, and no unique game should be included in the modeling dataset more than once.  
+* create a vector of the game_id_labels. Will need these to tie to our predictions later.
