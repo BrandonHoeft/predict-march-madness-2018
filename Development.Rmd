@@ -287,6 +287,7 @@ Specifically, each row will still represent a game_id, but we want some columns 
 ``` {r}
 
 head_to_head_stats <- reg_season_details_cumulative_stats %>%
+    mutate(team_season_id = paste(Season, TeamID, sep = "_")) %>%
     # self-join to get opponents data on same row as team playing a game.
     inner_join(reg_season_details_cumulative_stats, by = "game_id") %>%
     # remove doops where Team A and Team A is it's opponent. 
@@ -297,7 +298,7 @@ head_to_head_stats <- reg_season_details_cumulative_stats %>%
     rename_at(vars(ends_with(".y")), # for columns with.y
               function(x) stringr::str_replace(x, "\\.y", "_OPP")) %>% # suffix w/ opponent.
     # Select variables
-    select(game_id, Season, DayNum, TeamID, Team_name, Team_conf, outcome, outcome_1_0,
+    select(game_id, team_season_id, Season, DayNum, TeamID, Team_name, Team_conf, outcome, outcome_1_0,
            Loc, possessions, offense_efficiency, defense_efficiency,
            net_efficiency_ratio, score_diff, assist_to_fgm_ratio, effective_fg_rate,
            ORB_rate, DRB_rate, FT_rate, FTM_pct, offense_tov_per_100, 
@@ -346,7 +347,8 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
            PF_drawn_pg_DIFF = PF_drawn_pg - PF_drawn_pg_OPP,
            PF_committed_pg_DIFF = PF_committed_pg - PF_committed_pg_OPP,
            season_wins_DIFF = season_wins - season_wins_OPP,
-           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP)
+           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP) %>%
+    select(-team_season_id)
 ```
 
 ## Modeling Dataset
@@ -365,12 +367,14 @@ modeling_dataset <- head_to_head_matchup_stats %>%
     # also, only consider games starting after the quarter mark of the season.
     filter(complete.cases(.),
            DayNum > quantile(RegularSeasonDetailedResults$DayNum, .25)) %>%
-    select(game_id, outcome, Team_conf, Team_conf_OPP, conference_game_flag, ends_with("DIFF")) %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, Team_name_OPP) %>%
+    #select(game_id, outcome, Team_conf, conference_game_flag, ends_with("DIFF")) %>%
     # sample half of the games
-    sample_frac(0.5) %>%
+    sample_frac(0.01) %>%
     group_by(game_id) %>%
     slice(1) %>%
-    ungroup()
+    ungroup() %>%
+    select(game_id, outcome, everything())
 
 modeling_game_id <- modeling_dataset$game_id
 
@@ -380,6 +384,8 @@ modeling_dataset <- select(modeling_dataset, -game_id) %>%
 # contrasts(modeling_dataset$outcome)
 ```
 
+## Random Forest 
+
 Try random forest model with `caret`
 
 ```{r}
@@ -387,27 +393,50 @@ library(caret)
 library(ranger)
 
 training_setup <- trainControl(method = "cv",
-                               number = 10, #10-fold CV
-                               search = "grid",
+                               number = 5,
                                savePredictions = TRUE,
+                               summaryFunction = twoClassSummary,
                                classProbs = TRUE) 
 
 # define a grid of parameter options to try in ranger
-rf_grid <- data.frame(mtry = c(1:10))
+rf_grid <- data.frame(mtry = c(1, 5, 10, 15, 20),
+                      splitrule = c("gini"),
+                      min.node.size = c(5))
 
 set.seed(321)
-rf_model <- train(x = modeling_dataset[, -1],
+rf_fit <- train(x = modeling_dataset[, -1],
                  y = modeling_dataset$outcome,
                  method = 'ranger',
                  trControl = training_setup,
                  metric = "ROC",
                  tuneGrid = rf_grid)
 
-rf_model
+rf_fit
+summary(rf_fit)
+```
 
-rf_fit <- train(as.factor(old) ~ ., 
-                data = abalone_train, 
-                method = "ranger")
+## Test the model on the 2013-2017 NCAA Tourney Games
 
+``` {r}
+
+NCAA_tourney_13_17_winners <- NCAATourneyDetailedResults %>% 
+    filter(Season %in% 2014:2017) %>%
+    # see head to head stats, line 289 for identifier dataset. 
+    mutate(team_season_id = paste(Season, WTeamID, sep = "_"),
+           outcome = "W") %>%
+    select(team_season_id, Season, DayNum, outcome, starts_with("W")) %>%
+    rename_at(vars(starts_with("W")), # for columns starting with W
+              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
+    select(team_season_id, Season, DayNum, TeamID, outcome)
+
+NCAA_tourney_13_17_losers <- NCAATourneyDetailedResults %>% 
+    filter(Season %in% 2014:2017) %>%
+    # see head to head stats, line 289 for identifier dataset. 
+    mutate(team_season_id = paste(Season, WTeamID, sep = "_"),
+           outcome = "L") %>%
+    select(team_season_id, Season, DayNum, outcome, starts_with("L")) %>%
+    rename_at(vars(starts_with("L")), # for columns starting with W
+              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip L off column name.
+    select(team_season_id, Season, DayNum, TeamID, outcome)
 
 ```
