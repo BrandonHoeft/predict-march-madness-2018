@@ -43,9 +43,12 @@ library(dplyr)
 #Sys.setenv("AWS_ACCESS_KEY_ID" = "",
 #           "AWS_SECRET_ACCESS_KEY" = "")
 
-RegularSeasonDetailedResults <- s3read_using(FUN = read_csv, 
-                      object = "RegularSeasonDetailedResults.csv",
-                      bucket = "ncaabasketball")
+RegularSeasonDetailedResults_Prelim2018 <- s3read_using(FUN = read_csv, 
+                      object = "RegularSeasonDetailedResults_Prelim2018.csv",
+                      bucket = "ncaabasketball") %>%
+    mutate(tournament_type = "regular season") %>%
+    select(tournament_type, everything())
+
 
 team_conference <- s3read_using(FUN = read_csv, 
                       object = "TeamConferences.csv",
@@ -55,30 +58,22 @@ team_name <- s3read_using(FUN = read_csv,
                       object = "Teams.csv",
                       bucket = "ncaabasketball")
 
-# Massey Rankings website.
-#rankings <- s3read_using(FUN = read_csv, 
-#                      object = "MasseyOrdinals.csv",
-#                      bucket = "ncaabasketball")
-
-# https://fivethirtyeight.blogs.nytimes.com/2011/03/14/how-we-made-our-n-c-a-a-picks/
-#rankings <- rankings %>%
-#    filter(SystemName %in% c("POM", # Pomeroy
-#                             "SAG", # Sagarin (USA Today)
-#                             "RPI")) # Rating % Index. Accounts for Strength of Schedule. 
-
 # detailed box score results data for all NCAA Tournament games 2003 - 2017
-NCAATourneyDetailedResults <- s3read_using(FUN = read_csv, 
+NCAATourneyDetailedResults_Pre2018 <- s3read_using(FUN = read_csv, 
                       object = "NCAATourneyDetailedResults.csv",
-                      bucket = "ncaabasketball")
+                      bucket = "ncaabasketball") %>%
+    mutate(tournament_type = "NCAA Tournament") %>%
+    select(tournament_type, everything())
 
 # detailed box score results data for all regular season NCAA D1 games 2003 - 2017
-reg_season_details <- RegularSeasonDetailedResults %>%
+reg_season_details <- RegularSeasonDetailedResults_Prelim2018 %>%
+    bind_rows(NCAATourneyDetailedResults_Pre2018) %>%
     # conference of winning team.
     left_join(team_conference, by = c("WTeamID" = "TeamID",
                                       "Season" = "Season")) %>%
     # name of winning team.
     left_join(team_name, by = c("WTeamID" = "TeamID")) %>%
-    select(-contains("D1Season")) %>%
+    select(-contains("D1Season")) %>% # remove other cols from team_name
     rename(WTeam_conf = ConfAbbrev,
            WTeam_name = TeamName) %>%
     # conference of losing team.
@@ -89,10 +84,76 @@ reg_season_details <- RegularSeasonDetailedResults %>%
     select(-contains("D1Season")) %>%
     rename(LTeam_conf = ConfAbbrev,
            LTeam_name = TeamName) %>%
-    select(Season, DayNum, WTeamID, WTeam_name, WTeam_conf, WScore,
+    select(tournament_type, Season, DayNum, WTeamID, WTeam_name, WTeam_conf, WScore,
            LTeamID, LTeam_name, LTeam_conf, LScore, everything())
 
 glimpse(reg_season_details)
+```
+
+Additionally, I need to wrangle the team ratings data provided by Massey's website. Ratings have been normalized by the competition sponsor to be ordinal rankings instead. Per the definition of the competition of RankingDayNum: *this integer always ranges from 0 to 133, and is expressed in the same terms as a game's DayNum (where DayZero is found in the Seasons.csv file). The RankingDayNum is intended to tell you the first day that it is appropriate to use the rankings for predicting games. For example, if RankingDayNum is 110, then the rankings ought to be based upon game outcomes up through DayNum=109, and so you can use the rankings to make predictions of games on DayNum=110 or later. The final pre-tournament rankings each year have a RankingDayNum of 133, and can thus be used to make predictions of the games from the NCAA® tournament, which start on DayNum=134 (the Tuesday after Selection Sunday).*
+
+An example below is the rankings data available for using to predict game outcomes for Loyola Chicago's 2018 season. But these RankingDayNum values don't correspond to actual DayNum of every game Loyola Chicago played, which creates a problem. They more or less reflect the day in the season that the rating is useful for prediction as of. 
+
+```{r echo = FALSE}
+team_ratings <- s3read_using(FUN = read_csv, 
+                      object = "MasseyOrdinals_sag_pom_rpi_Prelim2018.csv",
+                      bucket = "ncaabasketball") %>%
+    tidyr::spread(SystemName, OrdinalRank)
+
+team_ratings %>%
+    filter(TeamID == 1260 & Season == 2018) %>% 
+    arrange(Season, RankingDayNum) %>%
+    kable()
+```
+
+Since the RankingDayNum does not match exactly with the DayNum from the box score data, a grid needs to be built that has every combination of possible TeamID, Season, DayNum (1-133). Then for each DayNum of a TeamID's Season, we can replace DayNum rows that don't have a team rating as of the specific RankingDayNum, by replacing this missing value with the latest non-missing value using the `zoo` library.
+
+As an example output, we can see how Loyola Chicago's running ratings for the last 3-weeks of data available for the 2018 season reflect their rating on every single day now. This makes it easy for joining these data to the actual game outcome we'll be modeling later.  
+``` {r}
+# all possible combinations of teamID,Season,Day from 1-133
+team_season_day_grid <- expand.grid(Season = 2003:2018,
+                                    RankingDayNum = 1:133, 
+                                    TeamID = unique(team_ratings$TeamID)) %>%
+    arrange(TeamID, Season, RankingDayNum)
+
+team_ratings_all_days <- team_season_day_grid %>%
+    left_join(team_ratings, by = c("Season", "RankingDayNum", "TeamID")) %>%
+    select(Season, RankingDayNum, TeamID, POM, RPI, SAG) %>%
+    group_by(TeamID, Season) %>%
+    arrange(TeamID, Season, RankingDayNum) %>% 
+    # http://www.markhneedham.com/blog/2015/06/28/r-dplyr-update-rows-with-earlierprevious-rows-values/
+    do(zoo::na.locf(.))
+
+team_ratings_all_days %>%
+    filter(TeamID == 1260 & Season == 2018 & RankingDayNum %in% 99:116) %>% 
+    arrange(Season, RankingDayNum) %>%
+    kable()
+
+# Actualy RPI as of end of 2018 season. 
+#team_ratings_all_days %>%
+#    filter(Season == 2018, RankingDayNum == 133) %>%
+#    arrange(RPI) %>% 
+#    kable()
+```
+
+Having pre-processed the rankings data for each team in each season for every day of that season,  I need to combine that with the game data, so we can know what each team and it's opponent's ranking (Pomeroy, Sagarin, RPI) was going into that matchup. 
+
+``` {r}
+reg_season_details <- reg_season_details %>%
+    # rankings of the WINNING team heading into each game day.
+    left_join(team_ratings_all_days, by = c("WTeamID" = "TeamID",
+                                            "Season" = "Season",
+                                            "DayNum" = "RankingDayNum")) %>%
+    rename(WPOM_rank = POM,
+           WRPI_rank = RPI,
+           WSAG_rank = SAG) %>%
+    # rankings of the LOSING team heading into each game day.
+    left_join(team_ratings_all_days, by = c("LTeamID" = "TeamID",
+                                            "Season" = "Season",
+                                            "DayNum" = "RankingDayNum")) %>%
+    rename(LPOM_rank = POM,
+           LRPI_rank = RPI,
+           LSAG_rank = SAG)
 ```
 
 Due to the data wrangling that will follow, I created a unique game identifier of each specific game matchup by concatenating the Season, DayNum, WTeamID, LTeamID. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. These games represent all regular season games and any conference tournament games played at the end of the regular season. 
