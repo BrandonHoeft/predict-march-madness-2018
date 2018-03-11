@@ -261,7 +261,7 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
      select(1:6, 22:43) %>%
      View()
 
-reg_season_details_cumulative_stats2 %>%
+reg_season_details_cumulative_stats %>%
     filter(Team_name == "Loyola-Chicago" & Season == 2017) %>%
     select(1:8, 24:45) %>%
      View()
@@ -359,9 +359,55 @@ Things to do:
 * create a vector of the game_id_labels. Will need these to tie to our predictions later.
 
 ``` {r}
+set.seed(321)
 modeling_dataset <- head_to_head_matchup_stats %>%
-    # only consider games starting after the quarter mark of the season.
-    filter(DayNum > quantile(RegularSeasonDetailedResults$DayNum, .25)) %>%
-    select(game_id, outcome, Team_conf, Team_conf_OPP, conference_game_flag, ends_with("DIFF"))
+    # games that are beginning of season have no 1-day lag summary stats. drop them.
+    # also, only consider games starting after the quarter mark of the season.
+    filter(complete.cases(.),
+           DayNum > quantile(RegularSeasonDetailedResults$DayNum, .25)) %>%
+    select(game_id, outcome, Team_conf, Team_conf_OPP, conference_game_flag, ends_with("DIFF")) %>%
+    # sample half of the games
+    sample_frac(0.5) %>%
+    group_by(game_id) %>%
+    slice(1) %>%
+    ungroup()
+
+modeling_game_id <- modeling_dataset$game_id
+
+modeling_dataset <- select(modeling_dataset, -game_id) %>%
+    mutate(outcome = factor(outcome, levels = c("L", "W")))
+
+# contrasts(modeling_dataset$outcome)
 ```
 
+Try random forest model with `caret`
+
+```{r}
+library(caret)
+library(ranger)
+
+training_setup <- trainControl(method = "cv",
+                               number = 10, #10-fold CV
+                               search = "grid",
+                               savePredictions = TRUE,
+                               classProbs = TRUE) 
+
+# define a grid of parameter options to try in ranger
+rf_grid <- data.frame(mtry = c(1:10))
+
+set.seed(321)
+rf_model <- train(x = modeling_dataset[, -1],
+                 y = modeling_dataset$outcome,
+                 method = 'ranger',
+                 trControl = training_setup,
+                 metric = "ROC",
+                 tuneGrid = rf_grid)
+
+rf_model
+
+rf_fit <- train(as.factor(old) ~ ., 
+                data = abalone_train, 
+                method = "ranger")
+
+
+```
