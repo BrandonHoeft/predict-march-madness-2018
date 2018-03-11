@@ -95,7 +95,7 @@ reg_season_details <- RegularSeasonDetailedResults %>%
 glimpse(reg_season_details)
 ```
 
-Due to the data wrangling that will follow, I created a unique game identifier of each specific game matchup by concatenating the Season, DayNum, WTeamID, LTeamID. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. 
+Due to the data wrangling that will follow, I created a unique game identifier of each specific game matchup by concatenating the Season, DayNum, WTeamID, LTeamID. From my inspection, omitting the *day* from the game ID string creates duplicates as teams may play each other multiple times in a season where the Winning and Losing team were the same. These games represent all regular season games and any conference tournament games played at the end of the regular season. 
 
 ``` {r game_id, echo = TRUE}
 reg_season_details <- reg_season_details %>%
@@ -162,6 +162,9 @@ reg_season_details <- reg_season_details %>%
            Wdefense_tov_per_100 = 100 *(LTO / (LFGA + (0.44 * LFTA) + LTO)),
            Wopponent_ORB_rate = LOR / (LOR + WDR),
            Wopponent_DRB_rate = LDR / (WOR + LDR),
+           # Foul Factors
+           WPF_drawn_pg = LPF,
+           WPF_committed_pg = WPF,  
            ########## LOSING TEAM's derived statistics ########## 
            Loffense_efficiency = 100 * (LScore / Lpossessions),
            Ldefense_efficiency = 100 * (WScore / Wpossessions),
@@ -178,8 +181,9 @@ reg_season_details <- reg_season_details %>%
            Ldefense_FT_rate = WFTA / WFGA,
            Ldefense_tov_per_100 = 100 *(WTO / (WFGA + (0.44 * WFTA) + WTO)),
            Lopponent_ORB_rate = WOR / (WOR + LDR), 
-           Lopponent_DRB_rate = WDR / (LOR + WDR)
-)
+           Lopponent_DRB_rate = WDR / (LOR + WDR),
+           LPF_drawn_pg = WPF,
+           LPF_committed_pg = LPF)
 ```
 
 In order to properly start computing 1-game lag team summary stats leading up to every game in a given season, the data needs to be restructured from the currently untidy wide format. Data from both teams playing a game currently exist in one row, with similar variables (ex. FGM) spread across multiple columns. Thankfully, it's known that a given team's box score data will be in the prefixed **W** columns when they won, in the prefixed **L** columns for the game row where they lost. Their opponents would just be in the adjacent and oppositely prefixed columns. 
@@ -243,7 +247,9 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
            defense_FT_rate = lag(cummean(defense_FT_rate)),
            defense_tov_per_100 = lag(cummean(defense_tov_per_100)),
            opponent_ORB_rate = lag(cummean(opponent_ORB_rate)),
-           opponent_DRB_rate = lag(cummean(opponent_DRB_rate))) %>%
+           opponent_DRB_rate = lag(cummean(opponent_DRB_rate)),
+           PF_drawn_pg = lag(cummean(PF_drawn_pg)), 
+           PF_committed_pg = lag(cummean(PF_committed_pg))) %>%
     select(1:6, outcome, outcome_1_0, everything()) %>%
     ungroup()
 ```
@@ -252,12 +258,12 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
 ###### Data Checks #########
  reg_season_details_long %>% 
      filter(Team_name == "Loyola-Chicago" & Season == 2017) %>% 
-     select(1:6, 22:41) %>%
+     select(1:6, 22:43) %>%
      View()
 
-reg_season_details_cumulative_stats %>%
+reg_season_details_cumulative_stats2 %>%
     filter(Team_name == "Loyola-Chicago" & Season == 2017) %>%
-    select(1:8, 24:43) %>%
+    select(1:8, 24:45) %>%
      View()
 
  
@@ -296,8 +302,8 @@ head_to_head_stats <- reg_season_details_cumulative_stats %>%
            net_efficiency_ratio, score_diff, assist_to_fgm_ratio, effective_fg_rate,
            ORB_rate, DRB_rate, FT_rate, FTM_pct, offense_tov_per_100, 
            defense_effective_fg_rate, defense_FT_rate, defense_tov_per_100,
-           opponent_ORB_rate, opponent_DRB_rate, average_tempo, season_wins,
-           season_win_rate, ends_with("OPP")) %>%
+           opponent_ORB_rate, opponent_DRB_rate, PF_drawn_pg, PF_committed_pg, 
+           average_tempo, season_wins, season_win_rate, ends_with("OPP")) %>%
     # remove unneeded variables about opponent.
     select(-Score_OPP, -Season_OPP, -DayNum_OPP, -outcome_OPP,
            -outcome_1_0_OPP,-Loc_OPP, -FGM_OPP, -FGA_OPP, -FGM3_OPP, -FGA3_OPP,
@@ -317,7 +323,8 @@ As such, the next set of features below measure the comparative differences betw
 
 ``` {r}
 head_to_head_matchup_stats <- head_to_head_stats %>%
-    mutate(possessions_DIFF = possessions - possessions_OPP, # basically the same as tempo_DIFF
+    mutate(conference_game_flag = Team_conf == Team_conf_OPP,
+           possessions_DIFF = possessions - possessions_OPP, # basically the same as tempo_DIFF
            tempo_DIFF = average_tempo - average_tempo_OPP,
            offense_efficiency_DIFF = offense_efficiency - offense_efficiency_OPP,
            defense_efficiency_DIFF = defense_efficiency - defense_efficiency_OPP,
@@ -336,6 +343,8 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
            # Difference in how each team allow's their opposition from getting ORB's.
            opponent_ORB_rate_DIFF = opponent_ORB_rate - opponent_ORB_rate_OPP,
            opponent_DRB_rate_DIFF = opponent_DRB_rate - opponent_DRB_rate_OPP,
+           PF_drawn_pg_DIFF = PF_drawn_pg - PF_drawn_pg_OPP,
+           PF_committed_pg_DIFF = PF_committed_pg - PF_committed_pg_OPP,
            season_wins_DIFF = season_wins - season_wins_OPP,
            season_win_rate_DIFF = season_win_rate - season_win_rate_OPP)
 ```
@@ -345,6 +354,14 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
 Things to do:
 
 * identify the target vector, W or L. This will be the column of one of the team's in the head-to-head datasets.  
-* Filter out features that aren't goin to be considered as predictors. Only need the target vector and feature vectors.
-* apply a **sampling strategy**: make sure the data is balanced and records are independent. For instance, there should be about 50/50 proportion of W's and L's to predict, and no unique game should be included in the modeling dataset more than once.  
+* Filter out features that aren't going to be considered as predictors. Only need the target vector and feature vectors.
+* apply a **data sampling strategy**: make sure the data is balanced and records are independent. For instance, there should be about 50/50 proportion of W's and L's to predict, and no unique game should be included in the modeling dataset more than once. Additionally, very early season games won't be considered b/c the predictor features suffer from small sample size. I'll focus on games at the 1st quartile or later from a season, day `r `
 * create a vector of the game_id_labels. Will need these to tie to our predictions later.
+
+``` {r}
+modeling_dataset <- head_to_head_matchup_stats %>%
+    # only consider games starting after the quarter mark of the season.
+    filter(DayNum > quantile(RegularSeasonDetailedResults$DayNum, .25)) %>%
+    select(game_id, outcome, Team_conf, Team_conf_OPP, conference_game_flag, ends_with("DIFF"))
+```
+
