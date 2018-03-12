@@ -106,13 +106,15 @@ team_ratings %>%
     kable()
 ```
 
-Since the RankingDayNum does not match exactly with the DayNum from the box score data, a grid needs to be built that has every combination of possible TeamID, Season, DayNum (1-133). Then for each DayNum of a TeamID's Season, we can replace DayNum rows that don't have a team rating as of the specific RankingDayNum, by replacing this missing value with the latest non-missing value using the `zoo` library.
+Since the RankingDayNum does not match exactly with the DayNum from the box score data, a grid needs to be built that has every combination of possible TeamID, Season, DayNum (1-133). Additional Days are created through Day 154 too, so that NCAA tournament games can carry forward their rankings from last publishing at regular season's end.
+
+Then for each DayNum of a TeamID's Season, we can replace DayNum rows that don't have a team rating as of the specific RankingDayNum, by replacing this missing value with the latest non-missing value using the `zoo` library.
 
 As an example output, we can see how Loyola Chicago's running ratings for the last 3-weeks of data available for the 2018 season reflect their rating on every single day now. This makes it easy for joining these data to the actual game outcome we'll be modeling later.  
 ``` {r}
 # all possible combinations of teamID,Season,Day from 1-133
 team_season_day_grid <- expand.grid(Season = 2003:2018,
-                                    RankingDayNum = 1:133, 
+                                    RankingDayNum = 1:154, # 154 is the last day of NCAA tourney. 
                                     TeamID = unique(team_ratings$TeamID)) %>%
     arrange(TeamID, Season, RankingDayNum)
 
@@ -254,7 +256,7 @@ for all their games (wins & losses) in season.
 
 ``` {r feature_creating, echo = TRUE}
 reg_season_details_winner <- reg_season_details %>%
-    select(game_id, Season, DayNum, starts_with("W"), average_tempo) %>%
+    select(game_id, tournament_type, Season, DayNum, starts_with("W"), average_tempo) %>%
     rename_at(vars(starts_with("W")), # for columns starting with W
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
     mutate(outcome = "W",
@@ -265,7 +267,7 @@ reg_season_details_loser <- reg_season_details %>%
     # need to create variable that codes the game location of the losing team, since the variable "Wloc" only codes winning team
     mutate(LLoc = ifelse(WLoc == "A", "H",
                          ifelse(WLoc == "H", "A", "N"))) %>%
-    select(game_id, Season, DayNum, starts_with("L"), average_tempo) %>%
+    select(game_id, tournament_type, Season, DayNum, starts_with("L"), average_tempo) %>%
     rename_at(vars(starts_with("L")), # for columns starting with L
               function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip off L. 
     mutate(outcome = "L",
@@ -280,7 +282,7 @@ reg_season_details_long <- bind_rows(reg_season_details_winner,
 
 ###  Convert per game stats to lagging team performance features
  
-Given the per game summary measures previously created, I can now create initial predictors that represent 1-game lag summaries of team's season performance leading up to the game date in question. 
+Given the per game summary measures previously created, I can now create initial predictors that represent 1-game lag summaries of team's season performance leading up to the game they were involved in. 
 
 
 ``` {r feature_creating, echo = FALSE}
@@ -311,7 +313,7 @@ reg_season_details_cumulative_stats <- reg_season_details_long %>%
            opponent_DRB_rate = lag(cummean(opponent_DRB_rate)),
            PF_drawn_pg = lag(cummean(PF_drawn_pg)), 
            PF_committed_pg = lag(cummean(PF_committed_pg))) %>%
-    select(1:6, outcome, outcome_1_0, everything()) %>%
+    select(1:7, outcome, outcome_1_0, everything()) %>%
     ungroup()
 ```
 
@@ -359,8 +361,9 @@ head_to_head_stats <- reg_season_details_cumulative_stats %>%
     rename_at(vars(ends_with(".y")), # for columns with.y
               function(x) stringr::str_replace(x, "\\.y", "_OPP")) %>% # suffix w/ opponent.
     # Select variables
-    select(game_id, team_season_id, Season, DayNum, TeamID, Team_name, Team_conf, outcome, outcome_1_0,
-           Loc, possessions, offense_efficiency, defense_efficiency,
+    select(game_id, team_season_id, tournament_type, Season, DayNum, TeamID, Team_name, 
+           Team_conf, outcome, outcome_1_0,
+           Loc, POM_rank, RPI_rank, SAG_rank, possessions, offense_efficiency, defense_efficiency,
            net_efficiency_ratio, score_diff, assist_to_fgm_ratio, effective_fg_rate,
            ORB_rate, DRB_rate, FT_rate, FTM_pct, offense_tov_per_100, 
            defense_effective_fg_rate, defense_FT_rate, defense_tov_per_100,
@@ -408,7 +411,10 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
            PF_drawn_pg_DIFF = PF_drawn_pg - PF_drawn_pg_OPP,
            PF_committed_pg_DIFF = PF_committed_pg - PF_committed_pg_OPP,
            season_wins_DIFF = season_wins - season_wins_OPP,
-           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP) %>%
+           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP,
+           POM_rank_DIFF = POM_rank_OPP - POM_rank, # how much better is the team ranked than opp. 
+           RPI_rank_DIFF = RPI_rank_OPP - RPI_rank,
+           SAG_rank_DIFF = SAG_rank_OPP - SAG_rank) %>%
     select(-team_season_id)
 ```
 
@@ -416,36 +422,38 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
 
 Things to do:
 
+* create a holdout dataset of all 2014-2017 NCAA Tournament games (**stage1 test data**)
 * identify the target vector, W or L. This will be the column of one of the team's in the head-to-head datasets.  
 * Filter out features that aren't going to be considered as predictors. Only need the target vector and feature vectors.
 * apply a **data sampling strategy**: make sure the data is balanced and records are independent. For instance, there should be about 50/50 proportion of W's and L's to predict, and no unique game should be included in the modeling dataset more than once. Additionally, very early season games won't be considered b/c the predictor features suffer from small sample size. I'll focus on games at the 1st quartile or later from a season, day `r `
 * create a vector of the game_id_labels. Will need these to tie to our predictions later.
 
 ``` {r}
+#stage1_test_data <- head_to_head_matchup_stats %>%
+
 set.seed(321)
 modeling_dataset <- head_to_head_matchup_stats %>%
+    # drop games ineligible: 2014:2018 Season
     # games that are beginning of season have no 1-day lag summary stats. drop them.
     # also, only consider games starting after the quarter mark of the season.
     filter(complete.cases(.),
-           DayNum > quantile(RegularSeasonDetailedResults$DayNum, .25)) %>%
+           Season %in% 2003:2013, 
+           DayNum > quantile(RegularSeasonDetailedResults_Prelim2018$DayNum, .10)) %>%
     select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP) %>%
     #select(game_id, outcome, Team_conf, conference_game_flag, ends_with("DIFF")) %>%
     # sample half of the games
-    sample_frac(0.05) %>%
+    sample_frac(0.10) %>%
     group_by(game_id) %>%
     slice(1) %>%
     ungroup() %>%
-    select(game_id, outcome, everything())
+    select(game_id, outcome, everything()) %>%
+    select(-tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP)
 
 modeling_game_id <- modeling_dataset$game_id
 
 modeling_dataset <- select(modeling_dataset, -game_id) %>%
     mutate(outcome = factor(outcome, levels = c("L", "W")),
-           Team_conf = factor(Team_conf),
-           Loc = factor(Loc),
-           Team_conf_OPP =  factor(Team_conf_OPP))
-
-modeling_dataset_no_conf <- select(modeling_dataset, -Team_conf, -Team_conf_OPP)
+           Loc = factor(Loc))
 
 # contrasts(modeling_dataset$outcome)
 ```
@@ -479,7 +487,7 @@ rf_fit <- train(x = modeling_dataset[, -1],
 
 rf_fit
 names(rf_fit) # what objects are stored in the variable importance
-varImp(rf_fit)
+plot(varImp(rf_fit))
 ```
 
 ## Random Forest 
@@ -490,89 +498,72 @@ Try random forest model with `caret` and `randomforest`.
 library(caret)
 library(randomForest)
 
+training_setup <- trainControl(method = "cv",
+                               number = 5,
+                               savePredictions = TRUE,
+                               summaryFunction = twoClassSummary, # needed for ROC metric
+                               classProbs = TRUE) 
+
 # define a grid of parameter options to try in ranger
-rf_grid2 <- expand.grid(mtry = c(1, 5, 10, 15, 25))
+rf_grid <- expand.grid(mtry = c(1, 5, 10, 15, 25))
 
 set.seed(321)
-rf_fit2 <- train(x = modeling_dataset[, -1],
+rf_fit <- train(x = modeling_dataset[, -1],
                  y = modeling_dataset$outcome,
                  method = 'rf',
                  trControl = training_setup,
                  metric = "ROC",
-                 tuneGrid = rf_grid2)
+                 tuneGrid = rf_grid)
 
-rf_fit2
-names(rf_fit2) # what objects are stored in the variable importance
-varImp(rf_fit2)
+rf_fit
+names(rf_fit) # what objects are stored in the variable importance
+varImp(rf_fit)
 ```
 
-## Random Forest 
 
-Try random forest model with `caret` and `randomforest`. Don't use team conference or opponent's team conference as a predictor. This leads to the best model so far with mtry = 25 and 5-fold AUC of 0.792.
-
-```{r}
-set.seed(321)
-rf_fit3 <- train(x = modeling_dataset_no_conf[, -1],
-                 y = modeling_dataset_no_conf$outcome,
-                 method = 'rf',
-                 trControl = training_setup,
-                 metric = "ROC",
-                 tuneGrid = rf_grid2)
-
-rf_fit3
-names(rf_fit3) # what objects are stored in the variable importance
-varImp(rf_fit3)
-```
-
-## Linear XGBoost 
-
-```{r include = FALSE, eval = FALSE}
-
-xgb_training_setup <- trainControl(method = "cv",
-                               number = 5,
-                               savePredictions = TRUE,
-                               summaryFunction = twoClassSummary, # needed for ROC metric
-                               classProbs = TRUE,
-                               verboseIter = TRUE,
-                               allowParallel = TRUE) 
-
-# define a grid of parameter options to try in ranger
-xgb_grid_1 <- expand.grid(nrounds= c(50,100,200,300),
-                          lambda = c(0),
-                          alpha = c(1))
-
-xgb_train_1 <- train(
-  x = as.matrix(modeling_dataset[, -1]),
-  y= df_train$Response,
- trControl = xgb_trcontrol,
- tuneGrid = xgb_grid_1,
- method="xgbLinear"
-)
-
-```
 
 ## Test the model on the 2013-2017 NCAA Tourney Games
 
 ``` {r}
+ncaa_2014_teams <- head_to_head_stats %>%
+    filter(Season == 2014  & tournament_type == "NCAA Tournament") %>%
+    distinct() %>%
+    select(TeamID) %>%
+    unique(.)
+ncaa_2014_teams <- ncaa_2014_teams$TeamID
+    
+ncaa_2015_teams <- head_to_head_stats %>%
+    filter(Season == 2015  & tournament_type == "NCAA Tournament") %>%
+    distinct() %>%
+    select(TeamID) %>%
+    unique(.)
+ncaa_2015_teams <- ncaa_2015_teams$TeamID
 
-NCAA_tourney_13_17_winners <- NCAATourneyDetailedResults %>% 
-    filter(Season %in% 2014:2017) %>%
-    # see head to head stats, line 289 for identifier dataset. 
-    mutate(team_season_id = paste(Season, WTeamID, sep = "_"),
-           outcome = "W") %>%
-    select(team_season_id, Season, DayNum, outcome, starts_with("W")) %>%
-    rename_at(vars(starts_with("W")), # for columns starting with W
-              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip W off column name.
-    select(team_season_id, Season, DayNum, TeamID, outcome)
+ncaa_2016_teams <- head_to_head_stats %>%
+    filter(Season == 2016  & tournament_type == "NCAA Tournament") %>%
+    distinct() %>%
+    select(TeamID) %>%
+    unique(.)
+ncaa_2016_teams <- ncaa_2016_teams$TeamID
 
-NCAA_tourney_13_17_losers <- NCAATourneyDetailedResults %>% 
-    filter(Season %in% 2014:2017) %>%
-    # see head to head stats, line 289 for identifier dataset. 
-    mutate(team_season_id = paste(Season, WTeamID, sep = "_"),
-           outcome = "L") %>%
-    select(team_season_id, Season, DayNum, outcome, starts_with("L")) %>%
-    rename_at(vars(starts_with("L")), # for columns starting with W
-              function(x) stringr::str_sub(x, start = 2L, end = -1L)) %>% # strip L off column name.
-    select(team_season_id, Season, DayNum, TeamID, outcome)
+ncaa_2017_teams <- head_to_head_stats %>%
+    filter(Season == 2017  & tournament_type == "NCAA Tournament") %>%
+    distinct() %>%
+    select(TeamID) %>%
+    unique(.)
+ncaa_2017_teams <- ncaa_2017_teams$TeamID
 
+
+
+ncaa_2014_test_data <- head_to_head_stats %>%
+    filter(Season == 2014,
+        tournament_type == "regular season",
+        TeamID %in% ncaa_2014_teams) %>%
+    group_by(TeamID, Season) %>%
+    arrange(TeamID, Season, desc(DayNum)) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(6:7,11:37)
+
+expand.grid(ncaa_2014_test_data, ncaa_2014_test_data
 ```
