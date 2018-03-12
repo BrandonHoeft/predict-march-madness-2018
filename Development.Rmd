@@ -429,31 +429,45 @@ Things to do:
 * create a vector of the game_id_labels. Will need these to tie to our predictions later.
 
 ``` {r}
-#stage1_test_data <- head_to_head_matchup_stats %>%
 
 set.seed(321)
-modeling_dataset <- head_to_head_matchup_stats %>%
+reg_season_sample <- head_to_head_matchup_stats %>%
     # drop games ineligible: 2014:2018 Season
     # games that are beginning of season have no 1-day lag summary stats. drop them.
     # also, only consider games starting after the quarter mark of the season.
     filter(complete.cases(.),
            Season %in% 2003:2013, 
-           DayNum > quantile(RegularSeasonDetailedResults_Prelim2018$DayNum, .10)) %>%
-    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP) %>%
+           DayNum > quantile(RegularSeasonDetailedResults_Prelim2018$DayNum, .25),
+           tournament_type == "regular season") %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
     #select(game_id, outcome, Team_conf, conference_game_flag, ends_with("DIFF")) %>%
     # sample half of the games
-    sample_frac(0.10) %>%
+    sample_frac(0.25) %>%
+    # only keep one unique game_id row for modeling.
     group_by(game_id) %>%
     slice(1) %>%
     ungroup() %>%
-    select(game_id, outcome, everything()) %>%
-    select(-tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP)
+    select(game_id, outcome, everything())
 
+NCAA_tourney_2003_2013 <- head_to_head_matchup_stats %>%
+    # include all NCAA tourney games from 2003 - 2013.
+    filter(complete.cases(.),
+           Season %in% 2003:2013, 
+           tournament_type == "NCAA Tournament") %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
+    # only keep one unique game_id row for modeling.
+    group_by(game_id) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(game_id, outcome, everything())
+
+
+modeling_dataset <- bind_rows(reg_season_sample, NCAA_tourney_2003_2013) %>%
+    mutate(outcome = factor(outcome, levels = c("L", "W")))
+# reorder the rows randomly.
+set.seed(321)
+modeling_dataset <- modeling_dataset[sample(nrow(modeling_dataset)),]
 modeling_game_id <- modeling_dataset$game_id
-
-modeling_dataset <- select(modeling_dataset, -game_id) %>%
-    mutate(outcome = factor(outcome, levels = c("L", "W")),
-           Loc = factor(Loc))
 
 # contrasts(modeling_dataset$outcome)
 ```
@@ -462,7 +476,7 @@ modeling_dataset <- select(modeling_dataset, -game_id) %>%
 
 Try random forest model with `caret` and `ranger`.
 
-```{r}
+```{r eval = FALSE}
 library(caret)
 library(ranger)
 
