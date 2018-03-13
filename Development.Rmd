@@ -571,54 +571,7 @@ rf_fit_subset1_2003_2013
 varImpPlot(rf_fit_subset1_2003_2013$finalModel)
 plot(rf_fit_subset1_2003_2013)
 
-s3save(rf_fit_subset1_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
+#s3save(rf_fit_subset1_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
 
 ```
 
-
-
-## Test the model on the 2013-2017 NCAA Tourney Games
-
-``` {r}
-ncaa_2014_teams <- head_to_head_stats %>%
-    filter(Season == 2014  & tournament_type == "NCAA Tournament") %>%
-    distinct() %>%
-    select(TeamID) %>%
-    unique(.)
-ncaa_2014_teams <- ncaa_2014_teams$TeamID
-    
-ncaa_2015_teams <- head_to_head_stats %>%
-    filter(Season == 2015  & tournament_type == "NCAA Tournament") %>%
-    distinct() %>%
-    select(TeamID) %>%
-    unique(.)
-ncaa_2015_teams <- ncaa_2015_teams$TeamID
-
-ncaa_2016_teams <- head_to_head_stats %>%
-    filter(Season == 2016  & tournament_type == "NCAA Tournament") %>%
-    distinct() %>%
-    select(TeamID) %>%
-    unique(.)
-ncaa_2016_teams <- ncaa_2016_teams$TeamID
-
-ncaa_2017_teams <- head_to_head_stats %>%
-    filter(Season == 2017  & tournament_type == "NCAA Tournament") %>%
-    distinct() %>%
-    select(TeamID) %>%
-    unique(.)
-ncaa_2017_teams <- ncaa_2017_teams$TeamID
-
-
-
-ncaa_2014_test_data <- head_to_head_stats %>%
-    filter(Season == 2014,
-        tournament_type == "regular season",
-        TeamID %in% ncaa_2014_teams) %>%
-    group_by(TeamID, Season) %>%
-    arrange(TeamID, Season, desc(DayNum)) %>%
-    slice(1) %>%
-    ungroup() %>%
-    select(6:7,11:37)
-
-expand.grid(ncaa_2014_test_data, ncaa_2014_test_data
-```
