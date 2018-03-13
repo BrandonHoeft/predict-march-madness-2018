@@ -232,7 +232,10 @@ ncaa_participants_2014_2017 <- s3read_using(FUN = read_csv,
     tidyr::separate(ID, 
                     into = c("Season", "TeamID_1", "TeamID_2"), 
                     sep = "_",
-                    remove = FALSE)
+                    remove = FALSE) %>%
+    mutate(Season = as.integer(Season),
+           TeamID_1 = as.integer(TeamID_1),
+           TeamID_2 = as.integer(TeamID_2))
 
 
 # Get 2014-2017 teams' last regular season game lagging team performance features ########
@@ -244,8 +247,119 @@ last_reg_season_game_2014_2017 <- reg_season_details_cumulative_stats %>%
     arrange(Team_name, Season, desc(DayNum)) %>%
     # select the row of the team's performance stats last game of season.
     slice(1) %>%
-    ungroup()
+    ungroup() %>%
+    select(-game_id, -tournament_type, -DayNum, -Team_name, -outcome,
+           -outcome_1_0, -Score, -Loc, -FGM, -FGA, -FGM3, -FGA3, -FTM, -FTA, -OR,
+           -DR, -Ast, -TO, -Stl, -Blk, -PF)
 
     
-modeling_data_ncaa_2014_2017
+modeling_data_ncaa_2014_2017 <- ncaa_participants_2014_2017 %>%
+    # left join the first team playing the game.
+    left_join(last_reg_season_game_2014_2017, by = c("Season" = "Season",
+                                                     "TeamID_1" = "TeamID")) %>%
+    left_join(last_reg_season_game_2014_2017, by = c("Season" = "Season",
+                                                     "TeamID_2" = "TeamID")) %>%
+    rename_at(vars(ends_with(".x")), # for columns with .x (team outcome to predict)
+              function(x) stringr::str_sub(x, start = 1L, end = -3L)) %>% # strip off the .x
+    rename_at(vars(ends_with(".y")), # for columns with.y
+              function(x) stringr::str_replace(x, "\\.y", "_OPP")) %>%
+    mutate(conference_game_flag = Team_conf == Team_conf_OPP,
+           possessions_DIFF = possessions - possessions_OPP, # basically the same as tempo_DIFF
+           tempo_DIFF = average_tempo - average_tempo_OPP,
+           offense_efficiency_DIFF = offense_efficiency - offense_efficiency_OPP,
+           defense_efficiency_DIFF = defense_efficiency - defense_efficiency_OPP,
+           net_efficiency_ratio_DIFF = net_efficiency_ratio - net_efficiency_ratio_OPP,
+           score_margin_DIFF = score_diff - score_diff_OPP,
+           assist_to_fgm_ratio_DIFF = assist_to_fgm_ratio - assist_to_fgm_ratio_OPP,
+           effective_fg_rate_DIFF = effective_fg_rate - effective_fg_rate_OPP,
+           ORB_rate_DIFF = ORB_rate - ORB_rate_OPP,
+           DRB_rate_DIFF = DRB_rate - DRB_rate_OPP,
+           FT_rate_DIFF = FT_rate - FT_rate_OPP,
+           FTM_pct_DIFF = FTM_pct - FTM_pct_OPP,
+           offense_tov_per_100_DIFF = offense_tov_per_100 - offense_tov_per_100_OPP,
+           defense_effective_fg_rate_DIFF = defense_effective_fg_rate - defense_effective_fg_rate_OPP,
+           defense_FT_rate_DIFF = defense_FT_rate - defense_FT_rate_OPP,
+           defense_tov_per_100_DIFF = defense_tov_per_100 - defense_tov_per_100_OPP,
+           # Difference in how each team allow's their opposition from getting ORB's.
+           opponent_ORB_rate_DIFF = opponent_ORB_rate - opponent_ORB_rate_OPP,
+           opponent_DRB_rate_DIFF = opponent_DRB_rate - opponent_DRB_rate_OPP,
+           PF_drawn_pg_DIFF = PF_drawn_pg - PF_drawn_pg_OPP,
+           PF_committed_pg_DIFF = PF_committed_pg - PF_committed_pg_OPP,
+           season_wins_DIFF = season_wins - season_wins_OPP,
+           season_win_rate_DIFF = season_win_rate - season_win_rate_OPP,
+           POM_rank_DIFF = POM_rank_OPP - POM_rank, # how much better is the team ranked than opp. 
+           RPI_rank_DIFF = RPI_rank_OPP - RPI_rank,
+           SAG_rank_DIFF = SAG_rank_OPP - SAG_rank) %>%
+    select(-starts_with("Team_conf"), -starts_with("TeamID"), -Season)
+
+# check no NAs or NANs
+sum(complete.cases(modeling_data_ncaa_2014_2017)) == nrow(modeling_data_ncaa_2014_2017)
+
+# Run model through rf_fit_2003_2013
+# s3load(object = rf_fit_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
+
+
+
+#########################################################################################
+# predict the outcome of the 2014-2017 game combinations 
+#########################################################################################
+rf_pred_2014_2017 <- predict(rf_fit_2003_2013, 
+                             newdata = modeling_data_ncaa_2014_2017[, -1],
+                             type = "prob")
+
+rf_pred_2014_2017 <- modeling_data_ncaa_2014_2017[1] %>%
+    mutate(Pred = rf_pred_2014_2017$W)
+
+
+actual_wins <- NCAATourneyDetailedResults_Pre2018 %>%
+    inner_join(team_name, by = c("WTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(team_name, by = c("LTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    filter(Season %in% 2014:2017) %>%
+    mutate(game_id = paste(Season, WTeamID, LTeamID, sep = "_"),
+           outcome = "W") %>%
+    select(game_id, outcome, TeamName.x, WScore, TeamName.y, LScore) %>%
+    rename(TeamName1 = TeamName.x,
+           Score1 = WScore,
+           TeamName2 = TeamName.y,
+           Score2 = LScore) %>%
+    inner_join(rf_pred_2014_2017, by = c("game_id" = "ID")) %>% 
+    arrange(Pred)
     
+actual_losses <- NCAATourneyDetailedResults_Pre2018 %>%
+    inner_join(team_name, by = c("WTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(team_name, by = c("LTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    filter(Season %in% 2014:2017) %>%
+    mutate(game_id = paste(Season, LTeamID, WTeamID, sep = "_"),
+           outcome = "L") %>%
+    select(game_id, outcome, TeamName.x, WScore, TeamName.y, LScore) %>%
+    rename(TeamName1 = TeamName.x,
+           Score1 = WScore,
+           TeamName2 = TeamName.y,
+           Score2 = LScore) %>%
+    inner_join(rf_pred_2014_2017, by = c("game_id" = "ID")) %>% 
+    arrange(Pred)
+
+performance <- bind_rows(actual_wins, actual_losses) %>%
+    arrange(outcome, Pred)
+
+library(ggplot2)
+ggplot(performance, aes(x = Pred, color = outcome)) + geom_density(alpha = 0.5)
+
+library(pROC)
+auc(response = performance$outcome, predictor = performance$Pred)
+# AUC = 0.7726
+
+library(MLmetrics)
+LogLoss(y_pred = performance$Pred, y_true = ifelse(performance$outcome == "W", 1, 0))
+# Log loss = 0.5774036
+
+performance_pred_2014_2017 <- performance
+
+s3write_using(x = rf_pred_2014_2017, 
+              FUN = write.csv,
+              bucket = "ncaabasketball",
+              object = "performance_pred_2014_2017.csv")
