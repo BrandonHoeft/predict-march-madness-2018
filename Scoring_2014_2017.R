@@ -301,7 +301,7 @@ s3load(object = "rf_fit_2003_2013.Rdata", bucket = "ncaabasketball")
 
 
 #########################################################################################
-# predict the outcome of the 2014-2017 game combinations 
+# predict the outcome of the 2014-2017 game combinations using rf_fit_2003_2013
 #########################################################################################
 rf_pred_2014_2017 <- predict(rf_fit_2003_2013, 
                              newdata = modeling_data_ncaa_2014_2017[, -1],
@@ -366,3 +366,4 @@ s3write_using(x = rf_pred_2014_2017_performance,
               FUN = write.csv,
               bucket = "ncaabasketball",
               object = "rf_pred_2014_2017_performance.csv")
+
