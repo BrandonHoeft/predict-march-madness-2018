@@ -418,7 +418,7 @@ head_to_head_matchup_stats <- head_to_head_stats %>%
     select(-team_season_id)
 ```
 
-## Modeling Dataset
+## Modeling Dataset 2003-2014 (to Predict 2014-2017 Tourney)
 
 Things to do:
 
@@ -439,7 +439,7 @@ reg_season_sample <- head_to_head_matchup_stats %>%
            Season %in% 2003:2013, 
            DayNum > quantile(RegularSeasonDetailedResults_Prelim2018$DayNum, .25),
            tournament_type == "regular season") %>%
-    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OP) %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
     #select(game_id, outcome, Team_conf, conference_game_flag, ends_with("DIFF")) %>%
     # sample half of the games
     sample_frac(0.25) %>%
@@ -454,7 +454,7 @@ NCAA_tourney_2003_2013 <- head_to_head_matchup_stats %>%
     filter(complete.cases(.),
            Season %in% 2003:2013, 
            tournament_type == "NCAA Tournament") %>%
-    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP) %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
     # only keep one unique game_id row for modeling.
     group_by(game_id) %>%
     slice(1) %>%
@@ -472,7 +472,7 @@ modeling_game_id <- modeling_dataset$game_id
 # contrasts(modeling_dataset$outcome)
 ```
 
-## Random Forest (Ranger)
+## Random Forest (Ranger): 2003-2013 (to Predict 2014-2017 Tourney)
 
 Try random forest model with `caret` and `ranger`.
 
@@ -504,7 +504,7 @@ names(rf_fit) # what objects are stored in the variable importance
 plot(varImp(rf_fit))
 ```
 
-## Random Forest 
+## Random Forest: 2003-2013 (to Predict 2014-2017 Tourney)
 
 Try random forest model with `caret` and `randomforest`. This model was trained using over 70 predictors. 
 
@@ -536,12 +536,15 @@ varImpPlot(rf_fit$finalModel)
 plot(rf_fit)
 
 rf_fit_2003_2013 <- rf_fit
+varImp(rf_fit_2003_2013)
 # model saved on 3/12/18 at 8:17pm
 #s3save(rf_fit_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
-
+#s3load(object = "rf_fit_2003_2013.Rdata", bucket = "ncaabasketball")
+#str(rf_fit_2003_2013)
+# names(rf_fit_2003_2013$trainingData)
 ```
 
-## Random Forest Subset1
+## Random Forest Subset1: 2003-2013 (to Predict 2014-2017 Tourney)
 
 Try random forest model with `caret` and `randomforest`. This model was trained on a subset of predictors that only measure matchup differences heading into the game. Nodesize was changed from default of 1 to 5. No effect on model performance, but improves run time.
 
@@ -575,3 +578,89 @@ plot(rf_fit_subset1_2003_2013)
 
 ```
 
+
+## Modeling Dataset 2003-2017 (to Predict 2018 Tourney)
+
+I've built models on 2003-2013 data, and tested it on the 2014-2017 tournament games in the script titled **Scoring_2014_2017.R**, this showed good predictive performance (AUC of .77, log-loss of 0.57 for the random forest). Now it's time to refit the optimal model for predicting the upcoming 2018 tournament by allowing for records from 2014-2018 regular season and all records from the 2014-2017 NCAA Tournament to help train the model using more recent data. That means:
+
+* a 25% random sample of regular season games that occurred after the 1st 25% of the regular season, and from seasons between 2003 and 2018. 
+* ALL NCAA Men's tournament games from 2003 to 2017. 
+
+``` {r}
+
+set.seed(321)
+reg_season_sample_2003_2018 <- head_to_head_matchup_stats %>%
+    # drop games ineligible: 2014:2018 Season
+    # games that are beginning of season have no 1-day lag summary stats. drop them.
+    # also, only consider games starting after the quarter mark of the season.
+    filter(complete.cases(.),
+           Season %in% 2003:2018, 
+           DayNum > quantile(RegularSeasonDetailedResults_Prelim2018$DayNum, .25),
+           tournament_type == "regular season") %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
+    #select(game_id, outcome, Team_conf, conference_game_flag, ends_with("DIFF")) %>%
+    # sample half of the games
+    sample_frac(0.25) %>%
+    # only keep one unique game_id row for modeling.
+    group_by(game_id) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(game_id, outcome, everything())
+
+NCAA_tourney_2003_2017 <- head_to_head_matchup_stats %>%
+    # include all NCAA tourney games from 2003 - 2013.
+    filter(complete.cases(.),
+           Season %in% 2003:2017, 
+           tournament_type == "NCAA Tournament") %>%
+    select(-Team_name, -outcome_1_0, -Season, -DayNum, -TeamID, -possessions, -possessions_OPP, -TeamID_OPP, -Team_name_OPP, -Loc, -tournament_type, -tournament_type_OPP, -Team_conf, -Team_conf_OPP) %>%
+    # only keep one unique game_id row for modeling.
+    group_by(game_id) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(game_id, outcome, everything())
+
+
+modeling_dataset <- bind_rows(reg_season_sample_2003_2018, NCAA_tourney_2003_2017) %>%
+    mutate(outcome = factor(outcome, levels = c("L", "W")))
+# reorder the rows randomly.
+set.seed(321)
+modeling_dataset <- modeling_dataset[sample(nrow(modeling_dataset)),]
+modeling_game_id <- modeling_dataset$game_id
+
+# nrow(modeling_dataset) == sum(nrow(reg_season_sample_2003_2018), nrow(NCAA_tourney_2003_2017))
+# contrasts(modeling_dataset$outcome)
+```
+
+## Random Forest: Final Fit for Predicting 2018 Tournament. 
+
+Try random forest model with `caret` and `randomforest`. This model was trained using over 70 predictors, and incorporates games from 2014-2017 in addition to the similar prior model built using only 2003-2013 games. 
+
+```{r}
+library(caret)
+library(randomForest)
+
+training_setup <- trainControl(method = "cv",
+                               number = 5,
+                               savePredictions = TRUE,
+                               summaryFunction = twoClassSummary, # needed for ROC metric
+                               classProbs = TRUE) 
+
+# define a grid of parameter options to try in ranger
+rf_grid <- expand.grid(mtry = c(1, 5, 10, 20))
+
+set.seed(321)
+rf_fit_2003_2018 <- train(x = modeling_dataset[, -c(1:2)],
+                 y = modeling_dataset$outcome,
+                 method = 'rf',
+                 trControl = training_setup,
+                 metric = "ROC",
+                 tuneGrid = rf_grid)
+
+rf_fit_2003_2018
+names(rf_fit_2003_2018) # what objects are stored in the variable importance
+varImp(rf_fit_2003_2018)
+varImpPlot(rf_fit_2003_2018$finalModel)
+plot(rf_fit_2003_2018)
+
+
+```
