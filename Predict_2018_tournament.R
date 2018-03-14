@@ -305,7 +305,7 @@ s3load(object = "rf_fit_2003_2018.Rdata", bucket = "ncaabasketball")
 names(modeling_data_ncaa_2018) %in% names(rf_fit_2003_2018$trainingData)
 
 #########################################################################################
-# predict the outcome of the 2014-2017 game combinations using rf_fit_2003_2013
+# predict the outcome of the 2018 game combinations using rf_fit_2003_2018
 #########################################################################################
 rf_preds_2018 <- predict(rf_fit_2003_2018, 
                              newdata = modeling_data_ncaa_2018[, -1],
@@ -316,7 +316,32 @@ rf_preds_2018 <- modeling_data_ncaa_2018[1] %>%
     mutate(Pred = rf_preds_2018$W)
 
 rf_preds_2018_submission1 <- rf_preds_2018 # submission on 3/13/2018 11pm.
+# write submission file for Kaggle to AWS S3. 
 s3write_using(x = rf_preds_2018_submission1, 
               FUN = write.csv,
               bucket = "ncaabasketball",
               object = "rf_preds_2018_submission1.csv")
+
+
+
+#########################################################################################
+# FOR FUN: get team details for predicted the outcome of the 2018 game combinations using rf_fit_2003_2018
+#########################################################################################
+
+
+rf_preds_2018_submission1_detailed <- ncaa_participants_2018 %>%
+    inner_join(team_name, by = c("TeamID_1" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(team_name, by = c("TeamID_2" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(rf_preds_2018, by = c("ID" = "ID")) %>%
+    rename(Team_1_Prediction = Pred,
+           TeamName_1 = TeamName.x,
+           TeamName_2 = TeamName.y) %>%
+    select(ID, Season, Team_1_Prediction, TeamID_1, TeamName_1, TeamID_2, TeamName_2)
+
+s3write_using(x = rf_preds_2018_submission1_detailed, 
+              FUN = write.csv,
+              bucket = "ncaabasketball",
+              object = "rf_preds_2018_submission1_detailed.csv")
+
