@@ -296,7 +296,7 @@ modeling_data_ncaa_2014_2017 <- ncaa_participants_2014_2017 %>%
 sum(complete.cases(modeling_data_ncaa_2014_2017)) == nrow(modeling_data_ncaa_2014_2017)
 
 # Run model through rf_fit_2003_2013
-# s3load(object = rf_fit_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
+s3load(object = "rf_fit_2003_2013.Rdata", bucket = "ncaabasketball")
 
 
 
@@ -307,6 +307,7 @@ rf_pred_2014_2017 <- predict(rf_fit_2003_2013,
                              newdata = modeling_data_ncaa_2014_2017[, -1],
                              type = "prob")
 
+# combine Game ID with predictions
 rf_pred_2014_2017 <- modeling_data_ncaa_2014_2017[1] %>%
     mutate(Pred = rf_pred_2014_2017$W)
 
@@ -343,23 +344,25 @@ actual_losses <- NCAATourneyDetailedResults_Pre2018 %>%
     inner_join(rf_pred_2014_2017, by = c("game_id" = "ID")) %>% 
     arrange(Pred)
 
-performance <- bind_rows(actual_wins, actual_losses) %>%
+rf_pred_2014_2017_performance <- bind_rows(actual_wins, actual_losses) %>%
     arrange(outcome, Pred)
 
 library(ggplot2)
-ggplot(performance, aes(x = Pred, color = outcome)) + geom_density(alpha = 0.5)
+ggplot(rf_pred_2014_2017_performance, aes(x = Pred, color = outcome)) + geom_density(alpha = 0.5) +
+    scale_x_continuous(breaks = seq(0, 1, .1)) +
+    labs(title = "Stage 1 Predictions by 2014-2017 NCAA Tourney Game Outcomes")
 
 library(pROC)
-auc(response = performance$outcome, predictor = performance$Pred)
+auc(response = rf_pred_2014_2017_performance$outcome, 
+    predictor = rf_pred_2014_2017_performance$Pred)
 # AUC = 0.7726
 
 library(MLmetrics)
-LogLoss(y_pred = performance$Pred, y_true = ifelse(performance$outcome == "W", 1, 0))
+LogLoss(y_pred = rf_pred_2014_2017_performance$Pred, 
+        y_true = ifelse(rf_pred_2014_2017_performance$outcome == "W", 1, 0))
 # Log loss = 0.5774036
 
-performance_pred_2014_2017 <- performance
-
-s3write_using(x = rf_pred_2014_2017, 
+s3write_using(x = rf_pred_2014_2017_performance, 
               FUN = write.csv,
               bucket = "ncaabasketball",
-              object = "performance_pred_2014_2017.csv")
+              object = "rf_pred_2014_2017_performance.csv")
