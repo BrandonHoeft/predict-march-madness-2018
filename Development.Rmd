@@ -661,6 +661,8 @@ names(rf_fit_2003_2018) # what objects are stored in the variable importance
 varImp(rf_fit_2003_2018)
 varImpPlot(rf_fit_2003_2018$finalModel)
 plot(rf_fit_2003_2018)
+# FINAL MODEL
+#s3save(rf_fit_2003_2018, bucket = "ncaabasketball", object = "rf_fit_2003_2018.Rdata")
 
 
 ```
