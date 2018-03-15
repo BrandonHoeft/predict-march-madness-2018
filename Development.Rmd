@@ -576,25 +576,25 @@ ridge_lasso_tune_grid <- expand.grid(alpha = c(0, 0.5, 1),
 
 
 set.seed(321)
-regularization_fit <- train(x = as.matrix(modeling_dataset[, -c(1:2)]),
+glmnet_fit_2003_2013 <- train(x = as.matrix(modeling_dataset[, -c(1:2)]),
                  y = modeling_dataset$outcome,
                  method = 'glmnet',
                  trControl = training_setup,
                  metric = "ROC",
                  tuneGrid = ridge_lasso_tune_grid)
 
-regularization_fit
-regularization_fit$bestTune
-plot(regularization_fit)
+glmnet_fit_2003_2013
+glmnet_fit_2003_2013$bestTune
+plot(glmnet_fit_2003_2013)
 # save model.
-LASSO_final_fit <- regularization_fit$finalModel
+LASSO_fit_2003_2013 <- glmnet_fit_2003_2013$finalModel
 #coef(regularization_fit$finalModel)
 
 # model saved on 3/13/18 at 8:07pm
-s3save(LASSO_final_fit, bucket = "ncaabasketball", object = "LASSO_final_fit.Rdata")
-#s3load(object = "LASSO_final_fit.Rdata", bucket = "ncaabasketball")
-#str(LASSO_final_fit)
-# names(LASSO_final_fit$trainingData)
+s3save(LASSO_fit_2003_2013, bucket = "ncaabasketball", object = "LASSO_fit_2003_2013.Rdata")
+#s3load(object = "LASSO_fit_2003_2013.Rdata", bucket = "ncaabasketball")
+#str(LASSO_fit_2003_2013)
+# names(LASSO_fit_2003_2013$trainingData)
 ```
 
 
