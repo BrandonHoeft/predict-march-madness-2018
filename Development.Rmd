@@ -682,6 +682,41 @@ varImpPlot(rf_fit_2003_2018$finalModel)
 plot(rf_fit_2003_2018)
 # FINAL MODEL
 #s3save(rf_fit_2003_2018, bucket = "ncaabasketball", object = "rf_fit_2003_2018.Rdata")
+```
 
+## Regularized Logistic Regression: Final Fit for Predicting 2018 Tournament. 
 
+Create a final fit of the regularized model (LASSO) with `caret` and `glmnet` previously identified, and tested in the **Scoring_2014_2017.R** script. It showed 0.79 AUC and 0.56 log-loss test performance on the 2014-2017 tournament games. 
+
+This model was trained using over 70 predictors, and incorporates games from 2014-2017 in addition to the similar prior model built using only 2003-2013 games. 
+
+``` {r}
+training_setup <- trainControl(method = "cv",
+                               number = 5,
+                               savePredictions = TRUE,
+                               summaryFunction = twoClassSummary, # needed for ROC metric
+                               classProbs = TRUE) 
+
+lasso_tune_grid <- expand.grid(alpha = c(1), # just set up for LASSO
+  lambda = seq(0.001, 0.25, length = 25))
+
+set.seed(321)
+glmnet_fit_2003_2018 <- train(x = as.matrix(modeling_dataset[, -c(1:2)]),
+                 y = modeling_dataset$outcome,
+                 method = 'glmnet',
+                 trControl = training_setup,
+                 metric = "ROC",
+                 tuneGrid = lasso_tune_grid)
+
+glmnet_fit_2003_2018
+glmnet_fit_2003_2018$bestTune
+plot(glmnet_fit_2003_2018)
+# save FINAL model
+LASSO_fit_2003_2018 <- glmnet_fit_2003_2018$finalModel
+
+# model saved on 3/13/18 at 10:15pm
+s3save(LASSO_fit_2003_2018, bucket = "ncaabasketball", object = "LASSO_fit_2003_2018.Rdata")
+#s3load(object = "LASSO_fit_2003_2018.Rdata", bucket = "ncaabasketball")
+#str(LASSO_fit_2003_2018)
+# names(LASSO_fit_2003_2018$trainingData)
 ```
