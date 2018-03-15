@@ -557,7 +557,6 @@ Hyperparameters to tune:
 Ridge regression: L2 penalization is used for Ridge regression. alpha = 0 is pure Ridge regression per `glmnet` documentation. Lambda is also a tuning parameter. Difference from LASSO is that the coefficients of initial predictors can be shrunk exactly to zero, performing automatic **feature selection**. Very useful when we have many predictor variables to choose from. 
 * ElasticNet: A combination of LASSO and Ridge regression. Alpha is set or tuned somewhere between 0 and 1. 
 
-I will focus on LASSO and Ridge regression primarily. 
 
 ```{r}
 library(caret)
@@ -569,13 +568,15 @@ training_setup <- trainControl(method = "cv",
                                summaryFunction = twoClassSummary, # needed for ROC metric
                                classProbs = TRUE) 
 
+# https://quantmacro.wordpress.com/2016/04/26/fitting-elastic-net-model-in-r/
 # setup a alpha and lambda grid to search for the pair of hyperparameters that minimize cross-validation error metric using either LASSO (alpha = 1) or Ridge (alpha = 0)
-ridge_lasso_tune_grid <- expand.grid(alpha = 0:1,
-  lambda = seq(0.0001, 1, length = 10))
+ridge_lasso_tune_grid <- expand.grid(alpha = c(0, 0.5, 1),
+  lambda = seq(0.001, 0.25, length = 25))
+
 
 
 set.seed(321)
-regularization_fit <- train(x = modeling_dataset[, -c(1:2)],
+regularization_fit <- train(x = as.matrix(modeling_dataset[, -c(1:2)]),
                  y = modeling_dataset$outcome,
                  method = 'glmnet',
                  trControl = training_setup,
@@ -583,16 +584,17 @@ regularization_fit <- train(x = modeling_dataset[, -c(1:2)],
                  tuneGrid = ridge_lasso_tune_grid)
 
 regularization_fit
-varImpPlot(regularization_fit$finalModel)
+regularization_fit$bestTune
 plot(regularization_fit)
+# save model.
+LASSO_final_fit <- regularization_fit$finalModel
+#coef(regularization_fit$finalModel)
 
-rf_fit_2003_2013 <- rf_fit
-varImp(rf_fit_2003_2013)
-# model saved on 3/12/18 at 8:17pm
-#s3save(rf_fit_2003_2013, bucket = "ncaabasketball", object = "rf_fit_2003_2013.Rdata")
-#s3load(object = "rf_fit_2003_2013.Rdata", bucket = "ncaabasketball")
-#str(rf_fit_2003_2013)
-# names(rf_fit_2003_2013$trainingData)
+# model saved on 3/13/18 at 8:07pm
+s3save(LASSO_final_fit, bucket = "ncaabasketball", object = "LASSO_final_fit.Rdata")
+#s3load(object = "LASSO_final_fit.Rdata", bucket = "ncaabasketball")
+#str(LASSO_final_fit)
+# names(LASSO_final_fit$trainingData)
 ```
 
 
