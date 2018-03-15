@@ -290,7 +290,8 @@ modeling_data_ncaa_2014_2017 <- ncaa_participants_2014_2017 %>%
            POM_rank_DIFF = POM_rank_OPP - POM_rank, # how much better is the team ranked than opp. 
            RPI_rank_DIFF = RPI_rank_OPP - RPI_rank,
            SAG_rank_DIFF = SAG_rank_OPP - SAG_rank) %>%
-    select(-starts_with("Team_conf"), -starts_with("TeamID"), -Season)
+    select(-starts_with("Team_conf"), -starts_with("TeamID"), -Season, -possessions,
+           -possessions_OPP)
 
 # check no NAs or NANs
 sum(complete.cases(modeling_data_ncaa_2014_2017)) == nrow(modeling_data_ncaa_2014_2017)
@@ -366,4 +367,82 @@ s3write_using(x = rf_pred_2014_2017_performance,
               FUN = write.csv,
               bucket = "ncaabasketball",
               object = "rf_pred_2014_2017_performance.csv")
+
+
+#########################################################################################
+# predict the outcome of the 2014-2017 game combinations using LASSO_pred_2014_2017
+#########################################################################################
+s3load(object = "LASSO_fit_2003_2013.Rdata", bucket = "ncaabasketball")
+
+LASSO_pred_2014_2017 <- predict(LASSO_fit_2003_2013, 
+                                s = LASSO_fit_2003_2013$lambdaOpt,
+                                newx = as.matrix(modeling_data_ncaa_2014_2017[, -1]),
+                                type = "response")
+LASSO_pred_2014_2017 <- cbind(modeling_data_ncaa_2014_2017[1], LASSO_pred_2014_2017) %>%
+    rename(Pred = "1")
+
+actual_wins <- NCAATourneyDetailedResults_Pre2018 %>%
+    inner_join(team_name, by = c("WTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(team_name, by = c("LTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    filter(Season %in% 2014:2017) %>%
+    mutate(game_id = paste(Season, WTeamID, LTeamID, sep = "_"),
+           outcome = "W") %>%
+    select(game_id, outcome, TeamName.x, WScore, TeamName.y, LScore) %>%
+    rename(TeamName1 = TeamName.x,
+           Score1 = WScore,
+           TeamName2 = TeamName.y,
+           Score2 = LScore) %>%
+    inner_join(LASSO_pred_2014_2017, by = c("game_id" = "ID")) %>% 
+    arrange(Pred)
+
+actual_losses <- NCAATourneyDetailedResults_Pre2018 %>%
+    inner_join(team_name, by = c("WTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    inner_join(team_name, by = c("LTeamID" = "TeamID")) %>%
+    select(-ends_with("D1Season")) %>%
+    filter(Season %in% 2014:2017) %>%
+    mutate(game_id = paste(Season, LTeamID, WTeamID, sep = "_"),
+           outcome = "L") %>%
+    select(game_id, outcome, TeamName.x, WScore, TeamName.y, LScore) %>%
+    rename(TeamName1 = TeamName.x,
+           Score1 = WScore,
+           TeamName2 = TeamName.y,
+           Score2 = LScore) %>%
+    inner_join(LASSO_pred_2014_2017, by = c("game_id" = "ID")) %>% 
+    arrange(Pred)
+
+LASSO_pred_2014_2017_performance <- bind_rows(actual_wins, actual_losses) %>%
+    arrange(outcome, Pred)
+
+library(ggplot2)
+ggplot(LASSO_pred_2014_2017_performance, aes(x = Pred, color = outcome)) + geom_density(alpha = 0.5) +
+    scale_x_continuous(breaks = seq(0, 1, .1)) +
+    labs(title = "Stage 1 Predictions by 2014-2017 NCAA Tourney Game Outcomes")
+
+library(pROC)
+auc(response = LASSO_pred_2014_2017_performance$outcome, 
+    predictor = LASSO_pred_2014_2017_performance$Pred)
+# AUC = 0.7927
+
+library(MLmetrics)
+LogLoss(y_pred = LASSO_pred_2014_2017_performance$Pred, 
+        y_true = ifelse(LASSO_pred_2014_2017_performance$outcome == "W", 1, 0))
+# Log loss = 0.558
+
+# how correlated are the Random Forest and LASSO regression? MODEL PREDICTIONS NEAR PERFECTLY CORRELATED.
+plot(LASSO_pred_2014_2017_performance$Pred, rf_pred_2014_2017_performance$Pred)
+cor(LASSO_pred_2014_2017_performance$Pred, rf_pred_2014_2017_performance$Pred)
+
+bind_rows(LASSO_pred_2014_2017_performance,
+          rf_pred_2014_2017_performance) %>%
+    mutate(model = c(rep("LASSO", nrow(LASSO_pred_2014_2017_performance)),
+                     rep("Random_Forest", nrow(rf_pred_2014_2017_performance)))) %>%
+    tidyr::spread(model, Pred) %>%
+ggplot(aes(x = LASSO,
+           y = Random_Forest)) + geom_point() + 
+    labs(title = "Correlation between Random Forest and LASSO",
+         subtitle = "2014-2017 NCAA Tournament games (out of sample predictions)")
+ggsave("LASSO vs RF correlation 2014-17 test data.png")
 
