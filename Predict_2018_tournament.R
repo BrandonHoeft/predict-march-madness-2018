@@ -345,3 +345,46 @@ s3write_using(x = rf_preds_2018_submission1_detailed,
               bucket = "ncaabasketball",
               object = "rf_preds_2018_submission1_detailed.csv")
 
+
+
+
+
+#########################################################################################
+# predict the outcome of the 2018 game combinations using LASSO_fit_2003_2018
+#########################################################################################
+# Run model through rf_fit_2003_2018. This is the model used for Kaggle Competition as of 3/13/18.
+s3load(object = "LASSO_fit_2003_2018.Rdata", bucket = "ncaabasketball")
+
+#check that names of features in the model agree with names in the modeling dataset.
+names(modeling_data_ncaa_2018) %in% LASSO_fit_2003_2018$xNames
+
+LASSO_preds_2018 <- predict(LASSO_fit_2003_2018, 
+                            s = LASSO_fit_2003_2018$lambdaOpt,
+                            newx = as.matrix(modeling_data_ncaa_2018[, -1]),
+                            type = "response")
+
+# combine Game ID with 2018 NCAA predictions. Prediction from LASSO model is for 1st team ID to beat 2nd team ID.
+LASSO_preds_2018 <- cbind(modeling_data_ncaa_2018[1], LASSO_preds_2018) %>%
+    rename(Pred = "1")
+
+LASSO_preds_2018_submission1 <- LASSO_preds_2018 # submission on 3/14/2018 10:40pm.
+# write submission file for Kaggle to AWS S3. 
+s3write_using(x = LASSO_preds_2018_submission1, 
+              FUN = write.csv,
+              bucket = "ncaabasketball",
+              object = "LASSO_preds_2018_submission1.csv")
+
+
+
+#########################################################################################
+# Compare 2018 tourney predictions between RF_fit_2003_2018 and LASSO_fit_2003_2018
+#########################################################################################
+
+rf_preds_2018_submission1 <- s3read_using(FUN = read_csv, 
+                                object = "rf_preds_2018_submission1.csv",
+                                bucket = "ncaabasketball")
+
+png(filename="2018 Preds - LASSO vs Random Forest Scatterplot.png",
+    width = 600, height = 600)
+plot(rf_preds_2018_submission1$Pred, LASSO_preds_2018_submission1$Pred)
+dev.off()
